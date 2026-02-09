@@ -31,3 +31,4 @@ md-5 = "0.10"
 sha1 = "0.10"
 digest = "0.10"
 toml = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }

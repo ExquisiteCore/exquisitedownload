@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::CorsLayer;
 use tracing::info;
 
 use crate::download_core::engine::DownloadEngine;
@@ -232,6 +233,7 @@ pub async fn start_rpc_server(
     let state = AppState { engine, secret };
     let app = Router::new()
         .route("/jsonrpc", post(handle_rpc))
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
