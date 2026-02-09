@@ -428,6 +428,14 @@ impl DownloadEngine {
         save_handle.abort();
         pb.finish_and_clear();
 
+        // Final update of segment progress to the shared task map
+        {
+            let mut tasks = self.tasks.write().await;
+            if let Some(t) = tasks.get_mut(&task_id) {
+                t.segments = task.segments.clone();
+            }
+        }
+
         if !errors.is_empty() {
             let _ = state::save_state(&task, download_dir).await;
             anyhow::bail!("download errors:\n{}", errors.join("\n"));
