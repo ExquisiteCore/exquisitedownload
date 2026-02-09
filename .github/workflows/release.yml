@@ -138,7 +138,25 @@ jobs:
         run: |
           TAG=${GITHUB_REF#refs/tags/}
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          # 获取上一个 tag
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^$TAG$" | head -n 1)
+
           echo "## What's Changed" > changelog.md
+          echo "" >> changelog.md
+
+          # 提交记录
+          if [ -n "$PREV_TAG" ]; then
+            echo "**Full Changelog**: \`$PREV_TAG\` → \`$TAG\`" >> changelog.md
+            echo "" >> changelog.md
+            git log "$PREV_TAG".."$TAG" --pretty=format:"- %s (%h)" --no-merges >> changelog.md
+          else
+            echo "**First Release**: \`$TAG\`" >> changelog.md
+            echo "" >> changelog.md
+            git log --pretty=format:"- %s (%h)" --no-merges >> changelog.md
+          fi
+
+          echo "" >> changelog.md
           echo "" >> changelog.md
           echo "### Downloads" >> changelog.md
           echo "" >> changelog.md
@@ -149,16 +167,6 @@ jobs:
           echo "| Windows x86_64 | \`edl-windows-amd64.exe.zip\` |" >> changelog.md
           echo "| macOS x86_64 | \`edl-macos-amd64.tar.gz\` |" >> changelog.md
           echo "| macOS ARM64 | \`edl-macos-arm64.tar.gz\` |" >> changelog.md
-          echo "" >> changelog.md
-          echo "### Usage" >> changelog.md
-          echo "" >> changelog.md
-          echo '```bash' >> changelog.md
-          echo "# Download a file" >> changelog.md
-          echo "edl download https://example.com/file.zip" >> changelog.md
-          echo "" >> changelog.md
-          echo "# Start RPC server" >> changelog.md
-          echo "edl rpc" >> changelog.md
-          echo '```' >> changelog.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
