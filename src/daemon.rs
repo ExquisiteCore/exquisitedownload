@@ -176,9 +176,12 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v", "edl-rpc",
-                "/t", "REG_SZ",
-                "/d", &rpc_cmd,
+                "/v",
+                "edl-rpc",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &rpc_cmd,
                 "/f",
             ])
             .status()
@@ -305,7 +308,8 @@ pub fn uninstall_service() -> Result<()> {
             .args([
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                "/v", "edl-rpc",
+                "/v",
+                "edl-rpc",
                 "/f",
             ])
             .status()
