@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::cli::RpcArgs;
 
@@ -113,8 +113,7 @@ pub fn stop_daemon() -> Result<()> {
         bail!("PID 文件不存在，edl rpc 可能未在运行");
     }
 
-    let pid_str = fs::read_to_string(&pid_file)
-        .context("Failed to read PID file")?;
+    let pid_str = fs::read_to_string(&pid_file).context("Failed to read PID file")?;
     let pid = pid_str.trim();
 
     #[cfg(target_os = "windows")]
@@ -173,11 +172,7 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
     {
         let status = Command::new("schtasks")
             .args([
-                "/create",
-                "/tn", "edl-rpc",
-                "/tr", &rpc_args,
-                "/sc", "onlogon",
-                "/rl", "highest",
+                "/create", "/tn", "edl-rpc", "/tr", &rpc_args, "/sc", "onlogon", "/rl", "highest",
                 "/f",
             ])
             .status()
@@ -260,12 +255,18 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
              </plist>\n",
             exe = exe,
             listen_entry = if args.listen != "127.0.0.1:6800" {
-                format!("\t\t<string>--listen</string>\n\t\t<string>{}</string>\n", args.listen)
+                format!(
+                    "\t\t<string>--listen</string>\n\t\t<string>{}</string>\n",
+                    args.listen
+                )
             } else {
                 String::new()
             },
             secret_entry = if let Some(ref secret) = args.secret {
-                format!("\t\t<string>--secret</string>\n\t\t<string>{}</string>\n", secret)
+                format!(
+                    "\t\t<string>--secret</string>\n\t\t<string>{}</string>\n",
+                    secret
+                )
             } else {
                 String::new()
             },
