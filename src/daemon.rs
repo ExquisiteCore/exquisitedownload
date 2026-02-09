@@ -157,6 +157,10 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
         .to_string();
 
     // Build the rpc command args
+    // Windows uses -D flag so schtasks spawns a hidden process
+    #[cfg(target_os = "windows")]
+    let mut rpc_args = format!("\"{}\" rpc -D", exe);
+    #[cfg(not(target_os = "windows"))]
     let mut rpc_args = format!("\"{}\" rpc", exe);
     if args.listen != "127.0.0.1:6800" {
         rpc_args.push_str(&format!(" --listen {}", args.listen));
