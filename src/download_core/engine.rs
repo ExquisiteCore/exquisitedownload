@@ -34,7 +34,13 @@ pub struct DownloadEngine {
 
 impl DownloadEngine {
     pub fn new(config: Config) -> Result<Self> {
-        let client = http::build_client(&config.user_agent, config.timeout_secs, None, None)?;
+        let client = http::build_client(
+            &config.user_agent,
+            config.timeout_secs,
+            config.max_redirects as usize,
+            None,
+            None,
+        )?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
         let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
 
@@ -55,7 +61,13 @@ impl DownloadEngine {
         proxy: Option<&str>,
         headers: Option<reqwest::header::HeaderMap>,
     ) -> Result<Self> {
-        let client = http::build_client(&config.user_agent, config.timeout_secs, proxy, headers)?;
+        let client = http::build_client(
+            &config.user_agent,
+            config.timeout_secs,
+            config.max_redirects as usize,
+            proxy,
+            headers,
+        )?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
         let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
 
@@ -89,39 +101,23 @@ impl DownloadEngine {
         if let Some(mut prev) = existing {
             // ETag validation: re-fetch metadata and compare
             let metadata = http::fetch_metadata(&self.client, &url).await?;
-            if let (Some(old_etag), Some(new_etag)) = (&prev.etag, &metadata.etag) {
-                if old_etag != new_etag {
-                    warn!(
-                        "ETag changed ({} -> {}), discarding old state",
-                        old_etag, new_etag
-                    );
-                    state::remove_state(&prev.id, &download_dir).await?;
-                    for seg in &prev.segments {
-                        let p = download_dir.join(seg.temp_filename(&prev.id));
-                        let _ = tokio::fs::remove_file(&p).await;
-                    }
-                    // Fall through to create new task below
-                } else {
-                    let resumed_bytes = prev.downloaded_bytes();
-                    let total = prev.total_size.unwrap_or(0);
-                    let completed_segs = prev.segments.iter().filter(|s| s.is_complete()).count();
-                    let total_segs = prev.segments.len();
-                    info!(
-                        "Resuming task {} — {}/{} downloaded, {}/{} segments done",
-                        prev.id,
-                        speed::format_bytes(resumed_bytes),
-                        speed::format_bytes(total),
-                        completed_segs,
-                        total_segs,
-                    );
-                    // Update URL if redirected
-                    if let Some(final_url) = metadata.final_url {
-                        prev.url = final_url;
-                    }
-                    prev.status = TaskStatus::Downloading;
-                    prev.error_message = None;
-                    return Ok(prev);
+            let etag_mismatch = matches!(
+                (&prev.etag, &metadata.etag),
+                (Some(old), Some(new)) if old != new
+            );
+
+            if etag_mismatch {
+                warn!(
+                    "ETag changed ({} -> {}), discarding old state",
+                    prev.etag.as_deref().unwrap_or("?"),
+                    metadata.etag.as_deref().unwrap_or("?"),
+                );
+                state::remove_state(&prev.id, &download_dir).await?;
+                for seg in &prev.segments {
+                    let p = download_dir.join(seg.temp_filename(&prev.id));
+                    let _ = tokio::fs::remove_file(&p).await;
                 }
+                // Fall through to create new task below
             } else {
                 let resumed_bytes = prev.downloaded_bytes();
                 let total = prev.total_size.unwrap_or(0);
@@ -563,6 +559,25 @@ impl DownloadEngine {
 
     pub fn set_speed_limit(&self, limit: u64) {
         self.speed_limiter.set_limit(limit);
+    }
+
+    /// Load persisted task states from disk (for RPC server restart recovery)
+    pub async fn load_persisted_tasks(&self) -> Result<()> {
+        let tasks = state::find_all_states(&self.config.download_dir).await?;
+        if tasks.is_empty() {
+            return Ok(());
+        }
+        let mut task_map = self.tasks.write().await;
+        for task in tasks {
+            info!(
+                "Restored task {} ({:?}) — {}",
+                task.id,
+                task.status,
+                task.file_path.display(),
+            );
+            task_map.insert(task.id.clone(), task);
+        }
+        Ok(())
     }
 }
 

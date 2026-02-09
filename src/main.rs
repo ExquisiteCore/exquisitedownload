@@ -119,6 +119,7 @@ async fn main() -> Result<()> {
             // CLI --secret overrides config file
             let secret = args.secret.or(config.rpc_secret.take());
             let engine = Arc::new(DownloadEngine::new(config)?);
+            engine.load_persisted_tasks().await?;
             let result = rpc::server::start_rpc_server(engine, &args.listen, secret).await;
 
             daemon::remove_pid();
@@ -126,10 +127,11 @@ async fn main() -> Result<()> {
         }
 
         Commands::Status => {
-            let resp = rpc_call("getGlobalStat", serde_json::json!({})).await?;
-            let active_list = rpc_call("tellActive", serde_json::json!({})).await?;
-            let waiting_list = rpc_call("tellWaiting", serde_json::json!({})).await?;
-            let stopped_list = rpc_call("tellStopped", serde_json::json!({})).await?;
+            let rpc_addr = &config.rpc_listen_addr;
+            let resp = rpc_call(rpc_addr, "getGlobalStat", serde_json::json!({})).await?;
+            let active_list = rpc_call(rpc_addr, "tellActive", serde_json::json!({})).await?;
+            let waiting_list = rpc_call(rpc_addr, "tellWaiting", serde_json::json!({})).await?;
+            let stopped_list = rpc_call(rpc_addr, "tellStopped", serde_json::json!({})).await?;
 
             println!("=== Global Stats ===");
             println!(
@@ -214,17 +216,32 @@ async fn main() -> Result<()> {
         }
 
         Commands::Pause { task_id } => {
-            rpc_call("pause", serde_json::json!([task_id])).await?;
+            rpc_call(
+                &config.rpc_listen_addr,
+                "pause",
+                serde_json::json!([task_id]),
+            )
+            .await?;
             println!("Task {} paused", task_id);
         }
 
         Commands::Resume { task_id } => {
-            rpc_call("unpause", serde_json::json!([task_id])).await?;
+            rpc_call(
+                &config.rpc_listen_addr,
+                "unpause",
+                serde_json::json!([task_id]),
+            )
+            .await?;
             println!("Task {} resumed", task_id);
         }
 
         Commands::Remove { task_id } => {
-            rpc_call("remove", serde_json::json!([task_id])).await?;
+            rpc_call(
+                &config.rpc_listen_addr,
+                "remove",
+                serde_json::json!([task_id]),
+            )
+            .await?;
             println!("Task {} removed", task_id);
         }
     }
@@ -232,10 +249,15 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn rpc_call(method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+async fn rpc_call(
+    addr: &std::net::SocketAddr,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let url = format!("http://{}/jsonrpc", addr);
     let client = reqwest::Client::new();
     let resp: reqwest::Response = client
-        .post("http://127.0.0.1:6800/jsonrpc")
+        .post(&url)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": "1",

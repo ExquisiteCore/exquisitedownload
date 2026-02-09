@@ -37,12 +37,14 @@ pub fn parse_headers(headers: &[String], cookie: Option<&str>) -> Result<HeaderM
 pub fn build_client(
     user_agent: &str,
     timeout_secs: u64,
+    max_redirects: usize,
     proxy: Option<&str>,
     default_headers: Option<HeaderMap>,
 ) -> Result<Client> {
     let mut builder = Client::builder()
         .user_agent(user_agent)
-        .timeout(std::time::Duration::from_secs(timeout_secs));
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .redirect(reqwest::redirect::Policy::limited(max_redirects));
 
     if let Some(proxy_url) = proxy {
         let proxy = reqwest::Proxy::all(proxy_url).context("invalid proxy URL")?;

@@ -17,6 +17,7 @@ pub struct Config {
     pub user_agent: String,
     pub timeout_secs: u64,
     pub retry_count: u32,
+    pub max_redirects: u32,
     pub proxy: Option<String>,
     /// Command to run after download completes (supports {file}, {size}, {id})
     pub on_complete: Option<String>,
@@ -40,6 +41,7 @@ struct FileConfig {
     user_agent: Option<String>,
     timeout_secs: Option<u64>,
     retry_count: Option<u32>,
+    max_redirects: Option<u32>,
     proxy: Option<String>,
     on_complete: Option<String>,
     /// Custom HTTP headers
@@ -64,6 +66,7 @@ impl Default for Config {
             user_agent: format!("ExquisiteDownload/{}", env!("CARGO_PKG_VERSION")),
             timeout_secs: 30,
             retry_count: 3,
+            max_redirects: 10,
             proxy: None,
             on_complete: None,
             headers: Vec::new(),
@@ -136,6 +139,9 @@ pub fn load_config() -> Result<Config> {
         if let Some(v) = file_cfg.retry_count {
             config.retry_count = v;
         }
+        if let Some(v) = file_cfg.max_redirects {
+            config.max_redirects = v;
+        }
         if let Some(v) = file_cfg.proxy {
             config.proxy = Some(v);
         }
@@ -199,6 +205,9 @@ fn generate_default_config() -> String {
 
 # 失败重试次数
 # retry_count = 3
+
+# HTTP 最大重定向次数（0 = 禁止重定向）
+# max_redirects = 10
 
 # HTTP/HTTPS/SOCKS5 代理
 # proxy = "http://127.0.0.1:7890"
@@ -298,6 +307,7 @@ mod tests {
         assert_eq!(config.max_connections_per_task, 8);
         assert_eq!(config.timeout_secs, 30);
         assert_eq!(config.retry_count, 3);
+        assert_eq!(config.max_redirects, 10);
         assert!(config.max_speed.is_none());
         assert!(config.proxy.is_none());
         assert!(config.rpc_secret.is_none());
