@@ -19,8 +19,7 @@ pub fn build_client(user_agent: &str, timeout_secs: u64, proxy: Option<&str>) ->
         .timeout(std::time::Duration::from_secs(timeout_secs));
 
     if let Some(proxy_url) = proxy {
-        let proxy = reqwest::Proxy::all(proxy_url)
-            .context("invalid proxy URL")?;
+        let proxy = reqwest::Proxy::all(proxy_url).context("invalid proxy URL")?;
         builder = builder.proxy(proxy);
     }
 
@@ -79,23 +78,19 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
 }
 
 /// Extract filename from Content-Disposition header or URL path
-fn extract_filename(
-    headers: &reqwest::header::HeaderMap,
-    url: &str,
-) -> Option<String> {
+fn extract_filename(headers: &reqwest::header::HeaderMap, url: &str) -> Option<String> {
     // Try Content-Disposition header first
-    if let Some(cd) = headers.get(reqwest::header::CONTENT_DISPOSITION) {
-        if let Ok(cd_str) = cd.to_str() {
-            if let Some(name) = parse_content_disposition(cd_str) {
-                return Some(name);
-            }
-        }
+    if let Some(cd) = headers.get(reqwest::header::CONTENT_DISPOSITION)
+        && let Ok(cd_str) = cd.to_str()
+        && let Some(name) = parse_content_disposition(cd_str)
+    {
+        return Some(name);
     }
 
     // Fall back to URL path
     let parsed = url::Url::parse(url).ok()?;
-    let segments = parsed.path_segments()?;
-    let last = segments.last()?;
+    let mut segments = parsed.path_segments()?;
+    let last = segments.next_back()?;
     if last.is_empty() {
         return None;
     }

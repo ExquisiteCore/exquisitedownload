@@ -31,7 +31,12 @@ pub struct DownloadTask {
 }
 
 impl DownloadTask {
-    pub fn new(url: String, file_path: PathBuf, download_dir: PathBuf, max_connections: u8) -> Self {
+    pub fn new(
+        url: String,
+        file_path: PathBuf,
+        download_dir: PathBuf,
+        max_connections: u8,
+    ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             url,

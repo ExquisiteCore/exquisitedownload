@@ -68,10 +68,10 @@ impl Default for Config {
 pub fn config_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                return dir.join("config.toml");
-            }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            return dir.join("config.toml");
         }
         PathBuf::from("config.toml")
     }
@@ -110,7 +110,8 @@ pub fn load_config() -> Result<Config> {
             config.max_speed = Some(parse_speed_limit(v)?);
         }
         if let Some(v) = &file_cfg.rpc_listen_addr {
-            config.rpc_listen_addr = v.parse()
+            config.rpc_listen_addr = v
+                .parse()
                 .with_context(|| format!("invalid rpc_listen_addr: {}", v))?;
         }
         if let Some(v) = file_cfg.rpc_secret {

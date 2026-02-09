@@ -40,14 +40,14 @@ pub async fn merge_segments(
     output.flush().await?;
 
     // Verify total size
-    if let Some(expected) = expected_size {
-        if total_written != expected {
-            anyhow::bail!(
-                "size mismatch after merge: expected {} bytes, got {}",
-                expected,
-                total_written
-            );
-        }
+    if let Some(expected) = expected_size
+        && total_written != expected
+    {
+        anyhow::bail!(
+            "size mismatch after merge: expected {} bytes, got {}",
+            expected,
+            total_written
+        );
     }
 
     // Clean up temp files

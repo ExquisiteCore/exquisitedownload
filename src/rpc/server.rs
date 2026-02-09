@@ -83,7 +83,13 @@ async fn handle_rpc(
         }
     }
 
-    let result = dispatch(&state.engine, &req.method, &req.params, state.secret.is_some()).await;
+    let result = dispatch(
+        &state.engine,
+        &req.method,
+        &req.params,
+        state.secret.is_some(),
+    )
+    .await;
     match result {
         Ok(val) => Json(RpcResponse::success(req.id, val)),
         Err(e) => Json(RpcResponse::error(req.id, -32000, e.to_string())),
@@ -117,10 +123,7 @@ async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
-            let split = params
-                .get("split")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(8) as u8;
+            let split = params.get("split").and_then(|v| v.as_u64()).unwrap_or(8) as u8;
 
             let task_id = engine
                 .download_background(url.to_string(), out, None, split, 8)

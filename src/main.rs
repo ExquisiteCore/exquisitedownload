@@ -102,8 +102,15 @@ async fn main() -> Result<()> {
                 resp.get("waiting").and_then(|v| v.as_u64()).unwrap_or(0),
                 resp.get("stopped").and_then(|v| v.as_u64()).unwrap_or(0),
                 {
-                    let limit = resp.get("speed_limit").and_then(|v| v.as_u64()).unwrap_or(0);
-                    if limit == 0 { "none".to_string() } else { util::speed::format_bytes(limit) + "/s" }
+                    let limit = resp
+                        .get("speed_limit")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if limit == 0 {
+                        "none".to_string()
+                    } else {
+                        util::speed::format_bytes(limit) + "/s"
+                    }
                 },
             );
 
@@ -117,15 +124,18 @@ async fn main() -> Result<()> {
                 println!("\n  No tasks.");
             } else {
                 println!(
-                    "\n{:<38} {:<10} {:<20} {:<12} {}",
-                    "GID", "STATUS", "FILE", "PROGRESS", "SIZE"
+                    "\n{:<38} {:<10} {:<20} {:<12} SIZE",
+                    "GID", "STATUS", "FILE", "PROGRESS"
                 );
                 println!("{}", "-".repeat(95));
 
                 for task in &all_tasks {
                     let gid = task.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                     let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                    let file_path = task.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
+                    let file_path = task
+                        .get("file_path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
                     let filename = std::path::Path::new(file_path)
                         .file_name()
                         .and_then(|n| n.to_str())

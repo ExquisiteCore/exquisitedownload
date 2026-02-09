@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "edl", about = "ExquisiteDownload - A high-performance download manager")]
+#[command(
+    name = "edl",
+    about = "ExquisiteDownload - A high-performance download manager"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

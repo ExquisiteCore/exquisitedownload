@@ -24,8 +24,10 @@ pub fn create_download_progress(
 pub fn create_unknown_size_progress(mp: &MultiProgress, filename: &str) -> ProgressBar {
     let pb = mp.add(ProgressBar::new_spinner());
     pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} {prefix:.cyan.bold} {bytes} ({bytes_per_sec})")
-            .unwrap(),
+        ProgressStyle::with_template(
+            "{spinner:.green} {prefix:.cyan.bold} {bytes} ({bytes_per_sec})",
+        )
+        .unwrap(),
     );
     pb.set_prefix(truncate_filename(filename, 20));
     pb

@@ -6,14 +6,17 @@ use tokio::io::AsyncReadExt;
 
 /// Parse a checksum string like "sha256=abc123..." into (algorithm, expected_hex)
 pub fn parse_checksum(s: &str) -> Result<(&str, &str)> {
-    let (algo, hash) = s
-        .split_once('=')
-        .ok_or_else(|| anyhow::anyhow!("invalid checksum format, expected algo=hex (e.g., sha256=abc123)"))?;
+    let (algo, hash) = s.split_once('=').ok_or_else(|| {
+        anyhow::anyhow!("invalid checksum format, expected algo=hex (e.g., sha256=abc123)")
+    })?;
     let algo = algo.trim();
     let hash = hash.trim();
     match algo {
         "sha256" | "sha1" | "md5" => Ok((algo, hash)),
-        _ => anyhow::bail!("unsupported checksum algorithm: {} (supported: sha256, sha1, md5)", algo),
+        _ => anyhow::bail!(
+            "unsupported checksum algorithm: {} (supported: sha256, sha1, md5)",
+            algo
+        ),
     }
 }
 
@@ -44,7 +47,9 @@ async fn compute_hash(path: &Path, algo: &str) -> Result<String> {
             let mut hasher = sha2::Sha256::new();
             loop {
                 let n = file.read(&mut buf).await?;
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 hasher.update(&buf[..n]);
             }
             Ok(format!("{:x}", hasher.finalize()))
@@ -53,7 +58,9 @@ async fn compute_hash(path: &Path, algo: &str) -> Result<String> {
             let mut hasher = sha1::Sha1::new();
             loop {
                 let n = file.read(&mut buf).await?;
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 hasher.update(&buf[..n]);
             }
             Ok(format!("{:x}", hasher.finalize()))
@@ -62,7 +69,9 @@ async fn compute_hash(path: &Path, algo: &str) -> Result<String> {
             let mut hasher = md5::Md5::new();
             loop {
                 let n = file.read(&mut buf).await?;
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 hasher.update(&buf[..n]);
             }
             Ok(format!("{:x}", hasher.finalize()))

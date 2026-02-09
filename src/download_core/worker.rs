@@ -14,6 +14,7 @@ use super::segment::{Segment, SegmentStatus};
 pub type ProgressCallback = Arc<dyn Fn(u32, u64) + Send + Sync>;
 
 /// Download a single segment to a temp file
+#[allow(clippy::too_many_arguments)]
 pub async fn download_segment(
     client: &Client,
     url: &str,
@@ -28,10 +29,26 @@ pub async fn download_segment(
     let mut last_err = None;
     for attempt in 0..=retry_count {
         if attempt > 0 {
-            tracing::warn!("segment {}: retry {}/{}", segment.index, attempt, retry_count);
+            tracing::warn!(
+                "segment {}: retry {}/{}",
+                segment.index,
+                attempt,
+                retry_count
+            );
             tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt.min(4)))).await;
         }
-        match download_segment_once(client, url, segment, download_dir, task_id, cancel_flag, speed_limiter, on_progress).await {
+        match download_segment_once(
+            client,
+            url,
+            segment,
+            download_dir,
+            task_id,
+            cancel_flag,
+            speed_limiter,
+            on_progress,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
             Err(e) => {
                 if cancel_flag.load(Ordering::Relaxed) {
@@ -44,6 +61,7 @@ pub async fn download_segment(
     Err(last_err.unwrap())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_segment_once(
     client: &Client,
     url: &str,
@@ -125,13 +143,15 @@ async fn download_segment_once(
         let chunk_len = chunk.len() as u64;
 
         // Shared token-bucket speed limiting
-        if let Some(limiter) = speed_limiter {
-            if let Some(delay) = limiter.consume(chunk_len) {
-                tokio::time::sleep(delay).await;
-            }
+        if let Some(limiter) = speed_limiter
+            && let Some(delay) = limiter.consume(chunk_len)
+        {
+            tokio::time::sleep(delay).await;
         }
 
-        file.write_all(&chunk).await.context("failed to write chunk")?;
+        file.write_all(&chunk)
+            .await
+            .context("failed to write chunk")?;
         segment.downloaded += chunk_len;
         on_progress(segment.index, chunk_len);
     }

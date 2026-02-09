@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -12,8 +12,8 @@ use tracing::{error, info, warn};
 use crate::config::Config;
 use crate::net::http;
 use crate::storage::state;
-use crate::util::speed::{self, SpeedLimiter};
 use crate::util::progress;
+use crate::util::speed::{self, SpeedLimiter};
 
 use super::merge::merge_segments;
 use super::segment::{create_segments, create_single_segment};
@@ -87,7 +87,10 @@ impl DownloadEngine {
             let metadata = http::fetch_metadata(&self.client, &url).await?;
             if let (Some(old_etag), Some(new_etag)) = (&prev.etag, &metadata.etag) {
                 if old_etag != new_etag {
-                    warn!("ETag changed ({} -> {}), discarding old state", old_etag, new_etag);
+                    warn!(
+                        "ETag changed ({} -> {}), discarding old state",
+                        old_etag, new_etag
+                    );
                     state::remove_state(&prev.id, &download_dir).await?;
                     for seg in &prev.segments {
                         let p = download_dir.join(seg.temp_filename(&prev.id));
@@ -151,7 +154,10 @@ impl DownloadEngine {
 
         info!(
             "File: {} | Size: {} | Range: {}",
-            file_path.file_name().and_then(|n| n.to_str()).unwrap_or(&filename),
+            file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&filename),
             metadata
                 .content_length
                 .map(speed::format_bytes)
@@ -253,7 +259,10 @@ impl DownloadEngine {
         state::save_state(&task, &download_dir).await?;
 
         // Acquire concurrency semaphore — waits if too many tasks are running
-        let _permit = self.concurrency_sem.acquire().await
+        let _permit = self
+            .concurrency_sem
+            .acquire()
+            .await
             .map_err(|_| anyhow::anyhow!("concurrency semaphore closed"))?;
 
         // Check if cancelled while waiting in queue
@@ -263,9 +272,7 @@ impl DownloadEngine {
         }
 
         // Run the download
-        let result = self
-            .run_download(task, &download_dir, cancel_flag)
-            .await;
+        let result = self.run_download(task, &download_dir, cancel_flag).await;
 
         // Clean up
         self.cancel_flags.write().await.remove(&task_id);
@@ -443,11 +450,7 @@ impl DownloadEngine {
             if let Some(expected) = task.total_size {
                 let actual = tokio::fs::metadata(&task.file_path).await?.len();
                 if actual != expected {
-                    anyhow::bail!(
-                        "size mismatch: expected {} bytes, got {}",
-                        expected,
-                        actual
-                    );
+                    anyhow::bail!("size mismatch: expected {} bytes, got {}", expected, actual);
                 }
             }
         }
