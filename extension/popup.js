@@ -63,18 +63,23 @@ const ICON_PAUSE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="curren
 const ICON_RESUME = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>`;
 const ICON_REMOVE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
+// Client-side speed tracking (server doesn't provide speed)
+const prevDownloaded = new Map();
+let lastRefreshTime = 0;
+
+function getDownloaded(task) {
+  return (task.segments || []).reduce((sum, s) => sum + (s.downloaded || 0), 0);
+}
+
 // Compute display values from a task object
 function taskProgress(task) {
   const totalSize = task.total_size || 0;
-  const downloaded = (task.segments || []).reduce(
-    (sum, s) => sum + (s.downloaded || 0),
-    0
-  );
+  const downloaded = getDownloaded(task);
   const status = task.status || "Pending";
   const isCompleted = status === "Completed";
   const isPausable = status === "Downloading";
   const isResumable = status === "Paused" || status === "Error";
-  const speed = task.speed || 0;
+  const speed = task._speed || 0;
 
   const progress = isCompleted
     ? 100
@@ -203,6 +208,30 @@ async function refresh() {
       ...(stopped || []),
     ];
 
+    // Calculate per-task speed from download delta
+    const now = Date.now();
+    const timeDelta = lastRefreshTime > 0 ? (now - lastRefreshTime) / 1000 : 0;
+    lastRefreshTime = now;
+
+    const currentIds = new Set();
+    allTasks.forEach((task) => {
+      const id = String(task.id);
+      currentIds.add(id);
+      const downloaded = getDownloaded(task);
+      const prev = prevDownloaded.get(id);
+      if (prev !== undefined && timeDelta > 0 && task.status === "Downloading") {
+        task._speed = Math.max(0, (downloaded - prev) / timeDelta);
+      } else {
+        task._speed = 0;
+      }
+      prevDownloaded.set(id, downloaded);
+    });
+
+    // Clean up stale entries
+    for (const id of prevDownloaded.keys()) {
+      if (!currentIds.has(id)) prevDownloaded.delete(id);
+    }
+
     const taskList = $("taskList");
 
     if (allTasks.length === 0) {
@@ -213,9 +242,6 @@ async function refresh() {
     // Remove empty placeholder if present
     const emptyEl = taskList.querySelector(".empty");
     if (emptyEl) emptyEl.remove();
-
-    // Track current task IDs for cleanup
-    const currentIds = new Set(allTasks.map((t) => String(t.id)));
 
     // Remove elements for tasks that no longer exist
     taskList.querySelectorAll(".task-item").forEach((el) => {
