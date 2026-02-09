@@ -143,7 +143,7 @@ jobs:
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
           # 获取上一个 tag
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^$TAG$" | head -n 1)
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^$TAG$" | head -n 1 || true)
 
           echo "## What's Changed" > changelog.md
           echo "" >> changelog.md
