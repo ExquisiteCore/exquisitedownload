@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use indicatif::MultiProgress;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{error, info, warn};
 
 use crate::config::Config;
@@ -28,12 +28,15 @@ pub struct DownloadEngine {
     cancel_flags: Arc<RwLock<HashMap<String, Arc<AtomicBool>>>>,
     speed_limiter: Arc<SpeedLimiter>,
     multi_progress: MultiProgress,
+    /// Semaphore limiting concurrent downloads
+    concurrency_sem: Arc<Semaphore>,
 }
 
 impl DownloadEngine {
     pub fn new(config: Config) -> Result<Self> {
-        let client = http::build_client(&config.user_agent, config.timeout_secs)?;
+        let client = http::build_client(&config.user_agent, config.timeout_secs, None)?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
+        let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
 
         Ok(Self {
             config,
@@ -42,6 +45,24 @@ impl DownloadEngine {
             cancel_flags: Arc::new(RwLock::new(HashMap::new())),
             speed_limiter,
             multi_progress: MultiProgress::new(),
+            concurrency_sem,
+        })
+    }
+
+    /// Create engine with a custom proxy
+    pub fn with_proxy(config: Config, proxy: Option<&str>) -> Result<Self> {
+        let client = http::build_client(&config.user_agent, config.timeout_secs, proxy)?;
+        let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
+        let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
+
+        Ok(Self {
+            config,
+            client,
+            tasks: Arc::new(RwLock::new(HashMap::new())),
+            cancel_flags: Arc::new(RwLock::new(HashMap::new())),
+            speed_limiter,
+            multi_progress: MultiProgress::new(),
+            concurrency_sem,
         })
     }
 
@@ -68,7 +89,6 @@ impl DownloadEngine {
                 if old_etag != new_etag {
                     warn!("ETag changed ({} -> {}), discarding old state", old_etag, new_etag);
                     state::remove_state(&prev.id, &download_dir).await?;
-                    // Clean up old part files
                     for seg in &prev.segments {
                         let p = download_dir.join(seg.temp_filename(&prev.id));
                         let _ = tokio::fs::remove_file(&p).await;
@@ -87,12 +107,15 @@ impl DownloadEngine {
                         completed_segs,
                         total_segs,
                     );
+                    // Update URL if redirected
+                    if let Some(final_url) = metadata.final_url {
+                        prev.url = final_url;
+                    }
                     prev.status = TaskStatus::Downloading;
                     prev.error_message = None;
                     return Ok(prev);
                 }
             } else {
-                // No ETag to compare — just resume
                 let resumed_bytes = prev.downloaded_bytes();
                 let total = prev.total_size.unwrap_or(0);
                 let completed_segs = prev.segments.iter().filter(|s| s.is_complete()).count();
@@ -105,6 +128,9 @@ impl DownloadEngine {
                     completed_segs,
                     total_segs,
                 );
+                if let Some(final_url) = metadata.final_url {
+                    prev.url = final_url;
+                }
                 prev.status = TaskStatus::Downloading;
                 prev.error_message = None;
                 return Ok(prev);
@@ -114,6 +140,9 @@ impl DownloadEngine {
         // New download
         info!("Fetching file info from {}", url);
         let metadata = http::fetch_metadata(&self.client, &url).await?;
+
+        // Use the final URL after redirects for Range requests
+        let effective_url = metadata.final_url.clone().unwrap_or(url);
 
         let filename = output
             .or(metadata.filename)
@@ -130,7 +159,7 @@ impl DownloadEngine {
             if metadata.supports_range { "yes" } else { "no" }
         );
 
-        let mut task = DownloadTask::new(url, file_path, download_dir, max_connections);
+        let mut task = DownloadTask::new(effective_url, file_path, download_dir, max_connections);
         task.total_size = metadata.content_length;
         task.supports_range = metadata.supports_range;
         task.etag = metadata.etag;
@@ -202,7 +231,7 @@ impl DownloadEngine {
         Ok(task_id)
     }
 
-    /// Execute a task: register, download, merge, clean up.
+    /// Execute a task: register, acquire semaphore, download, merge, clean up.
     async fn execute_task(&self, task: DownloadTask) -> Result<()> {
         let task_id = task.id.clone();
         let download_dir = task.download_dir.clone();
@@ -222,6 +251,16 @@ impl DownloadEngine {
 
         // Save initial state
         state::save_state(&task, &download_dir).await?;
+
+        // Acquire concurrency semaphore — waits if too many tasks are running
+        let _permit = self.concurrency_sem.acquire().await
+            .map_err(|_| anyhow::anyhow!("concurrency semaphore closed"))?;
+
+        // Check if cancelled while waiting in queue
+        if cancel_flag.load(Ordering::Relaxed) {
+            self.cancel_flags.write().await.remove(&task_id);
+            return Ok(());
+        }
 
         // Run the download
         let result = self
@@ -352,7 +391,6 @@ impl DownloadEngine {
                 for (seg, counter) in snapshot.segments.iter_mut().zip(save_counters.iter()) {
                     seg.downloaded = counter.load(Ordering::Relaxed);
                 }
-                // Update shared task map (fixes Bug 3: stale RPC data)
                 if let Some(t) = save_tasks.write().await.get_mut(&snapshot.id) {
                     t.segments = snapshot.segments.clone();
                 }
@@ -402,7 +440,6 @@ impl DownloadEngine {
                 .await
                 .context("failed to rename temp file")?;
 
-            // Verify single-segment size
             if let Some(expected) = task.total_size {
                 let actual = tokio::fs::metadata(&task.file_path).await?.len();
                 if actual != expected {
@@ -458,16 +495,13 @@ impl DownloadEngine {
 
     /// Remove a task and clean up its files
     pub async fn remove_task(&self, task_id: &str) -> Result<()> {
-        // Cancel if running
         if let Some(flag) = self.cancel_flags.read().await.get(task_id) {
             flag.store(true, Ordering::Relaxed);
         }
 
         let task = self.tasks.write().await.remove(task_id);
         if let Some(task) = task {
-            // Remove state file
             let _ = state::remove_state(task_id, &task.download_dir).await;
-            // Remove part files
             for seg in &task.segments {
                 let p = task.download_dir.join(seg.temp_filename(task_id));
                 let _ = tokio::fs::remove_file(&p).await;

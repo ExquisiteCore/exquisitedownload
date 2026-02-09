@@ -8,15 +8,23 @@ pub struct FileMetadata {
     pub supports_range: bool,
     pub filename: Option<String>,
     pub etag: Option<String>,
+    /// The final URL after following redirects
+    pub final_url: Option<String>,
 }
 
-/// Build a configured HTTP client
-pub fn build_client(user_agent: &str, timeout_secs: u64) -> Result<Client> {
-    Client::builder()
+/// Build a configured HTTP client with optional proxy
+pub fn build_client(user_agent: &str, timeout_secs: u64, proxy: Option<&str>) -> Result<Client> {
+    let mut builder = Client::builder()
         .user_agent(user_agent)
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .context("failed to build HTTP client")
+        .timeout(std::time::Duration::from_secs(timeout_secs));
+
+    if let Some(proxy_url) = proxy {
+        let proxy = reqwest::Proxy::all(proxy_url)
+            .context("invalid proxy URL")?;
+        builder = builder.proxy(proxy);
+    }
+
+    builder.build().context("failed to build HTTP client")
 }
 
 /// Send a HEAD request to get file metadata
@@ -32,6 +40,16 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
         anyhow::bail!("HEAD request returned status {}", status);
     }
 
+    // Capture the final URL after redirects
+    let final_url = {
+        let resp_url = resp.url().as_str();
+        if resp_url != url {
+            Some(resp_url.to_string())
+        } else {
+            None
+        }
+    };
+
     let headers = resp.headers();
 
     let content_length = headers
@@ -44,7 +62,7 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("bytes"));
 
-    let filename = extract_filename(headers, url);
+    let filename = extract_filename(headers, resp.url().as_str());
 
     let etag = headers
         .get(reqwest::header::ETAG)
@@ -56,6 +74,7 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
         supports_range,
         filename,
         etag,
+        final_url,
     })
 }
 

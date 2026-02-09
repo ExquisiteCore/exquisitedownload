@@ -9,7 +9,12 @@ use tracing::info;
 use crate::download_core::engine::DownloadEngine;
 use crate::download_core::task::TaskStatus;
 
-type SharedEngine = Arc<DownloadEngine>;
+/// Shared application state for the RPC server
+#[derive(Clone)]
+pub struct AppState {
+    pub engine: Arc<DownloadEngine>,
+    pub secret: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
@@ -58,31 +63,56 @@ impl RpcResponse {
 }
 
 async fn handle_rpc(
-    State(engine): State<SharedEngine>,
+    State(state): State<AppState>,
     Json(req): Json<RpcRequest>,
 ) -> Json<RpcResponse> {
-    let result = dispatch(&engine, &req.method, &req.params).await;
+    // Token authentication: check first param "token:SECRET" (aria2-style)
+    if let Some(ref secret) = state.secret {
+        let expected = format!("token:{}", secret);
+        let token_ok = req
+            .params
+            .get(0)
+            .and_then(|v| v.as_str())
+            .is_some_and(|t| t == expected);
+        if !token_ok {
+            return Json(RpcResponse::error(
+                req.id,
+                -32600,
+                "Unauthorized: invalid or missing token".into(),
+            ));
+        }
+    }
+
+    let result = dispatch(&state.engine, &req.method, &req.params, state.secret.is_some()).await;
     match result {
         Ok(val) => Json(RpcResponse::success(req.id, val)),
         Err(e) => Json(RpcResponse::error(req.id, -32000, e.to_string())),
     }
 }
 
+/// When secret is set, params[0] is the token, so real params shift by 1
+fn param_offset(has_secret: bool) -> usize {
+    if has_secret { 1 } else { 0 }
+}
+
 async fn dispatch(
     engine: &Arc<DownloadEngine>,
     method: &str,
     params: &serde_json::Value,
+    has_secret: bool,
 ) -> anyhow::Result<serde_json::Value> {
+    let off = param_offset(has_secret);
+
     match method {
         "addUri" => {
             let url = params
-                .get(0)
+                .get(off)
                 .or_else(|| params.get("url"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing url parameter"))?;
 
             let out = params
-                .get(1)
+                .get(off + 1)
                 .or_else(|| params.get("out"))
                 .and_then(|v| v.as_str())
                 .map(String::from);
@@ -92,7 +122,6 @@ async fn dispatch(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(8) as u8;
 
-            // Non-blocking: spawns download in background, returns task_id immediately
             let task_id = engine
                 .download_background(url.to_string(), out, None, split, 8)
                 .await?;
@@ -101,25 +130,25 @@ async fn dispatch(
         }
 
         "pause" => {
-            let task_id = extract_task_id(params)?;
+            let task_id = extract_task_id(params, off)?;
             engine.pause_task(task_id).await?;
             Ok(serde_json::json!(task_id))
         }
 
         "unpause" => {
-            let task_id = extract_task_id(params)?;
+            let task_id = extract_task_id(params, off)?;
             engine.resume_task(task_id).await?;
             Ok(serde_json::json!(task_id))
         }
 
         "remove" => {
-            let task_id = extract_task_id(params)?;
+            let task_id = extract_task_id(params, off)?;
             engine.remove_task(task_id).await?;
             Ok(serde_json::json!(task_id))
         }
 
         "tellStatus" => {
-            let task_id = extract_task_id(params)?;
+            let task_id = extract_task_id(params, off)?;
             let task = engine
                 .get_task(task_id)
                 .await
@@ -180,19 +209,27 @@ async fn dispatch(
     }
 }
 
-fn extract_task_id(params: &serde_json::Value) -> anyhow::Result<&str> {
+fn extract_task_id(params: &serde_json::Value, offset: usize) -> anyhow::Result<&str> {
     params
-        .get(0)
+        .get(offset)
         .or_else(|| params.get("gid"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing task id"))
 }
 
 /// Start the JSON-RPC server
-pub async fn start_rpc_server(engine: Arc<DownloadEngine>, addr: &str) -> anyhow::Result<()> {
+pub async fn start_rpc_server(
+    engine: Arc<DownloadEngine>,
+    addr: &str,
+    secret: Option<String>,
+) -> anyhow::Result<()> {
+    if secret.is_some() {
+        info!("RPC authentication enabled");
+    }
+    let state = AppState { engine, secret };
     let app = Router::new()
         .route("/jsonrpc", post(handle_rpc))
-        .with_state(engine);
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("JSON-RPC server listening on {}", addr);

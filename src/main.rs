@@ -37,56 +37,125 @@ async fn main() -> Result<()> {
                 .map(config::parse_speed_limit)
                 .transpose()?;
 
-            let engine = DownloadEngine::new(config)?;
+            // Parse checksum early so we fail before downloading
+            let checksum = args
+                .checksum
+                .as_deref()
+                .map(util::checksum::parse_checksum)
+                .transpose()?;
+
+            let engine = if args.proxy.is_some() {
+                DownloadEngine::with_proxy(config, args.proxy.as_deref())?
+            } else {
+                DownloadEngine::new(config)?
+            };
 
             let task_id = engine
                 .download(
                     args.url,
                     args.out,
-                    args.dir,
+                    args.dir.clone(),
                     args.split,
                     args.max_connections,
                     speed_limit,
                 )
                 .await?;
 
+            // Checksum verification after successful download
+            if let Some((algo, expected)) = checksum {
+                let task = engine.get_task(&task_id).await;
+                if let Some(task) = task {
+                    info!("Verifying {} checksum...", algo);
+                    util::checksum::verify_file(&task.file_path, algo, expected).await?;
+                    info!("Checksum OK ({})", algo);
+                }
+            }
+
             info!("Task {} completed successfully", task_id);
         }
 
         Commands::Rpc(args) => {
             let engine = Arc::new(DownloadEngine::new(config)?);
-            rpc::server::start_rpc_server(engine, &args.listen).await?;
+            rpc::server::start_rpc_server(engine, &args.listen, args.secret).await?;
         }
 
         Commands::Status => {
-            let client = reqwest::Client::new();
-            let resp: reqwest::Response = client
-                .post("http://127.0.0.1:6800/jsonrpc")
-                .json(&serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": "1",
-                    "method": "getGlobalStat"
-                }))
-                .send()
-                .await?;
+            let resp = rpc_call("getGlobalStat", serde_json::json!({})).await?;
+            let active_list = rpc_call("tellActive", serde_json::json!({})).await?;
+            let waiting_list = rpc_call("tellWaiting", serde_json::json!({})).await?;
+            let stopped_list = rpc_call("tellStopped", serde_json::json!({})).await?;
 
-            let body: serde_json::Value = resp.json().await?;
-            if let Some(result) = body.get("result") {
-                println!("Global Status:");
+            // Global stats
+            println!("=== Global Stats ===");
+            println!(
+                "  Active: {}  |  Waiting: {}  |  Stopped: {}  |  Speed Limit: {}",
+                resp.get("active").and_then(|v| v.as_u64()).unwrap_or(0),
+                resp.get("waiting").and_then(|v| v.as_u64()).unwrap_or(0),
+                resp.get("stopped").and_then(|v| v.as_u64()).unwrap_or(0),
+                {
+                    let limit = resp.get("speed_limit").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if limit == 0 { "none".to_string() } else { util::speed::format_bytes(limit) + "/s" }
+                },
+            );
+
+            // Task table
+            let all_tasks: Vec<&serde_json::Value> = [&active_list, &waiting_list, &stopped_list]
+                .iter()
+                .filter_map(|v| v.as_array())
+                .flatten()
+                .collect();
+
+            if all_tasks.is_empty() {
+                println!("\n  No tasks.");
+            } else {
                 println!(
-                    "  Active: {}",
-                    result.get("active").and_then(|v| v.as_u64()).unwrap_or(0)
+                    "\n{:<38} {:<10} {:<20} {:<12} {}",
+                    "GID", "STATUS", "FILE", "PROGRESS", "SIZE"
                 );
-                println!(
-                    "  Waiting: {}",
-                    result.get("waiting").and_then(|v| v.as_u64()).unwrap_or(0)
-                );
-                println!(
-                    "  Stopped: {}",
-                    result.get("stopped").and_then(|v| v.as_u64()).unwrap_or(0)
-                );
-            } else if let Some(err) = body.get("error") {
-                eprintln!("Error: {}", err);
+                println!("{}", "-".repeat(95));
+
+                for task in &all_tasks {
+                    let gid = task.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                    let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                    let file_path = task.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
+                    let filename = std::path::Path::new(file_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(file_path);
+                    let display_name = if filename.len() > 18 {
+                        format!("{}...", &filename[..15])
+                    } else {
+                        filename.to_string()
+                    };
+
+                    let total_size = task.get("total_size").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let downloaded: u64 = task
+                        .get("segments")
+                        .and_then(|v| v.as_array())
+                        .map(|segs| {
+                            segs.iter()
+                                .filter_map(|s| s.get("downloaded").and_then(|d| d.as_u64()))
+                                .sum()
+                        })
+                        .unwrap_or(0);
+
+                    let progress = if total_size > 0 {
+                        format!("{:.1}%", downloaded as f64 / total_size as f64 * 100.0)
+                    } else {
+                        util::speed::format_bytes(downloaded)
+                    };
+
+                    let size_str = if total_size > 0 {
+                        util::speed::format_bytes(total_size)
+                    } else {
+                        "unknown".to_string()
+                    };
+
+                    println!(
+                        "{:<38} {:<10} {:<20} {:<12} {}",
+                        gid, status, display_name, progress, size_str
+                    );
+                }
             }
         }
 

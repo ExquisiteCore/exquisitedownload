@@ -64,6 +64,14 @@ pub struct DownloadArgs {
     /// Speed limit (e.g., 1M, 500K)
     #[arg(long)]
     pub limit_speed: Option<String>,
+
+    /// Verify checksum after download (e.g., sha256=abcdef..., md5=..., sha1=...)
+    #[arg(long)]
+    pub checksum: Option<String>,
+
+    /// HTTP/HTTPS/SOCKS5 proxy (e.g., http://127.0.0.1:7890, socks5://...)
+    #[arg(long)]
+    pub proxy: Option<String>,
 }
 
 #[derive(clap::Args)]
