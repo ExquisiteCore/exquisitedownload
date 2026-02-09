@@ -17,11 +17,36 @@ pub async fn download_segment(
     url: &str,
     segment: &mut Segment,
     download_dir: &std::path::Path,
+    task_id: &str,
     cancel_flag: &AtomicBool,
     speed_limiter: Option<&Arc<AtomicU64>>,
     on_progress: &ProgressCallback,
 ) -> Result<()> {
-    let temp_path = download_dir.join(segment.temp_filename("dl"));
+    let temp_path = download_dir.join(segment.temp_filename(task_id));
+
+    // When resuming, trust the actual file size on disk over state counter,
+    // because the process may have been killed between a file write and a state save.
+    if temp_path.exists() {
+        let file_len = tokio::fs::metadata(&temp_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if file_len != segment.downloaded {
+            tracing::debug!(
+                "segment {}: adjusting downloaded {} -> {} (actual file size)",
+                segment.index,
+                segment.downloaded,
+                file_len
+            );
+            segment.downloaded = file_len;
+        }
+    }
+
+    // Already complete?
+    if segment.is_complete() {
+        segment.status = SegmentStatus::Completed;
+        return Ok(());
+    }
 
     let resume_from = segment.resume_offset();
     let end_byte = segment.end - 1; // Range header is inclusive
@@ -39,7 +64,11 @@ pub async fn download_segment(
     let response = request.send().await.context("segment request failed")?;
     let status = response.status();
     if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
-        anyhow::bail!("segment {} download failed with status {}", segment.index, status);
+        anyhow::bail!(
+            "segment {} download failed with status {}",
+            segment.index,
+            status
+        );
     }
 
     segment.status = SegmentStatus::Downloading;
@@ -67,11 +96,10 @@ pub async fn download_segment(
         let chunk = chunk.context("error reading chunk")?;
         let chunk_len = chunk.len() as u64;
 
-        // Speed limiting: simple token bucket check
+        // Speed limiting: simple delay-based throttling
         if let Some(limiter) = speed_limiter {
             let limit = limiter.load(Ordering::Relaxed);
             if limit > 0 {
-                // Simple delay-based throttling
                 let delay_ms = (chunk_len * 1000) / limit;
                 if delay_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;

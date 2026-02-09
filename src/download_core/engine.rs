@@ -57,48 +57,67 @@ impl DownloadEngine {
         let download_dir = dir.unwrap_or_else(|| self.config.download_dir.clone());
         tokio::fs::create_dir_all(&download_dir).await?;
 
-        // Fetch metadata
-        info!("Fetching file info from {}", url);
-        let metadata = http::fetch_metadata(&self.client, &url).await?;
+        // Check for resumable state
+        let existing = state::find_state_by_url(&url, &download_dir).await?;
 
-        let filename = output
-            .or(metadata.filename)
-            .unwrap_or_else(|| "download".to_string());
-
-        let file_path = download_dir.join(&filename);
-
-        info!(
-            "File: {} | Size: {} | Range: {}",
-            filename,
-            metadata
-                .content_length
-                .map(speed::format_bytes)
-                .unwrap_or_else(|| "unknown".into()),
-            if metadata.supports_range { "yes" } else { "no" }
-        );
-
-        // Create or resume task
-        let mut task = DownloadTask::new(url.clone(), file_path.clone(), max_connections);
-        task.total_size = metadata.content_length;
-        task.supports_range = metadata.supports_range;
-
-        // Create segments
-        if let Some(total_size) = metadata.content_length {
-            if metadata.supports_range && split > 1 {
-                task.segments = create_segments(total_size, split);
-                info!("Split into {} segments", split);
-            } else {
-                task.segments = create_single_segment(total_size);
-                if !metadata.supports_range {
-                    info!("Server doesn't support Range, using single connection");
-                }
-            }
+        let task = if let Some(mut prev) = existing {
+            let resumed_bytes = prev.downloaded_bytes();
+            let total = prev.total_size.unwrap_or(0);
+            let completed_segs = prev.segments.iter().filter(|s| s.is_complete()).count();
+            let total_segs = prev.segments.len();
+            info!(
+                "Resuming task {} — {}/{} downloaded, {}/{} segments done",
+                prev.id,
+                speed::format_bytes(resumed_bytes),
+                speed::format_bytes(total),
+                completed_segs,
+                total_segs,
+            );
+            prev.status = TaskStatus::Downloading;
+            prev.error_message = None;
+            prev
         } else {
-            // Unknown size, single segment with u64::MAX end
-            task.segments = vec![super::segment::Segment::new(0, 0, u64::MAX)];
-        }
+            // Fetch metadata for new task
+            info!("Fetching file info from {}", url);
+            let metadata = http::fetch_metadata(&self.client, &url).await?;
 
-        task.status = TaskStatus::Downloading;
+            let filename = output
+                .or(metadata.filename)
+                .unwrap_or_else(|| "download".to_string());
+            let file_path = download_dir.join(&filename);
+
+            info!(
+                "File: {} | Size: {} | Range: {}",
+                filename,
+                metadata
+                    .content_length
+                    .map(speed::format_bytes)
+                    .unwrap_or_else(|| "unknown".into()),
+                if metadata.supports_range { "yes" } else { "no" }
+            );
+
+            let mut task = DownloadTask::new(url.clone(), file_path, max_connections);
+            task.total_size = metadata.content_length;
+            task.supports_range = metadata.supports_range;
+
+            if let Some(total_size) = metadata.content_length {
+                if metadata.supports_range && split > 1 {
+                    task.segments = create_segments(total_size, split);
+                    info!("Split into {} segments", split);
+                } else {
+                    task.segments = create_single_segment(total_size);
+                    if !metadata.supports_range {
+                        info!("Server doesn't support Range, using single connection");
+                    }
+                }
+            } else {
+                task.segments = vec![super::segment::Segment::new(0, 0, u64::MAX)];
+            }
+
+            task.status = TaskStatus::Downloading;
+            task
+        };
+
         let task_id = task.id.clone();
 
         // Set up cancellation
@@ -159,6 +178,7 @@ impl DownloadEngine {
     ) -> Result<()> {
         let start_time = Instant::now();
         let total_size = task.total_size.unwrap_or(0);
+        let task_id = task.id.clone();
         let filename = task
             .file_path
             .file_name()
@@ -177,12 +197,22 @@ impl DownloadEngine {
         let downloaded = Arc::new(AtomicU64::new(task.downloaded_bytes()));
         pb.set_position(task.downloaded_bytes());
 
-        // Progress callback
+        // Per-segment downloaded byte counters (for real-time state saving)
+        let seg_counters: Vec<Arc<AtomicU64>> = task
+            .segments
+            .iter()
+            .map(|s| Arc::new(AtomicU64::new(s.downloaded)))
+            .collect();
+        let seg_counters = Arc::new(seg_counters);
+
+        // Progress callback — updates both global and per-segment counters
         let downloaded_clone = downloaded.clone();
         let pb_clone = pb.clone();
-        let on_progress: ProgressCallback = Arc::new(move |_seg_idx, bytes| {
+        let counters_clone = seg_counters.clone();
+        let on_progress: ProgressCallback = Arc::new(move |seg_idx, bytes| {
             downloaded_clone.fetch_add(bytes, Ordering::Relaxed);
             pb_clone.set_position(downloaded_clone.load(Ordering::Relaxed));
+            counters_clone[seg_idx as usize].fetch_add(bytes, Ordering::Relaxed);
         });
 
         // Launch segment workers
@@ -197,6 +227,7 @@ impl DownloadEngine {
             let client = self.client.clone();
             let url = task.url.clone();
             let dir = download_dir.to_path_buf();
+            let tid = task_id.clone();
             let cancel = cancel_flag.clone();
             let speed_limit = self.speed_limit.clone();
             let progress_cb = on_progress.clone();
@@ -208,6 +239,7 @@ impl DownloadEngine {
                     &url,
                     &mut segment,
                     &dir,
+                    &tid,
                     &cancel,
                     Some(&speed_limit),
                     &progress_cb,
@@ -218,6 +250,26 @@ impl DownloadEngine {
 
             handles.push(handle);
         }
+
+        // Periodic state saving (every 3 seconds)
+        let save_task_snapshot = task.clone();
+        let save_dir = download_dir.to_path_buf();
+        let save_counters = seg_counters.clone();
+        let save_cancel = cancel_flag.clone();
+        let save_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
+            loop {
+                interval.tick().await;
+                if save_cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let mut snapshot = save_task_snapshot.clone();
+                for (seg, counter) in snapshot.segments.iter_mut().zip(save_counters.iter()) {
+                    seg.downloaded = counter.load(Ordering::Relaxed);
+                }
+                let _ = state::save_state(&snapshot, &save_dir).await;
+            }
+        });
 
         // Wait for all segments
         let mut errors = Vec::new();
@@ -235,10 +287,13 @@ impl DownloadEngine {
             }
         }
 
+        // Stop periodic saving
+        save_handle.abort();
+
         pb.finish_and_clear();
 
         if !errors.is_empty() {
-            // Save state for resume
+            // Save final state for resume
             let _ = state::save_state(&task, download_dir).await;
             anyhow::bail!("download errors:\n{}", errors.join("\n"));
         }
@@ -246,12 +301,12 @@ impl DownloadEngine {
         // Merge segments
         if segments_len > 1 {
             info!("Merging {} segments...", segments_len);
-            merge_segments(&task.segments, "dl", download_dir, &task.file_path)
+            merge_segments(&task.segments, &task_id, download_dir, &task.file_path)
                 .await
                 .context("failed to merge segments")?;
         } else {
             // Single segment: just rename the temp file
-            let temp_path = download_dir.join(task.segments[0].temp_filename("dl"));
+            let temp_path = download_dir.join(task.segments[0].temp_filename(&task_id));
             tokio::fs::rename(&temp_path, &task.file_path)
                 .await
                 .context("failed to rename temp file")?;

@@ -42,9 +42,34 @@ pub async fn remove_state(task_id: &str, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Find a resumable state by URL in a directory
+pub async fn find_state_by_url(url: &str, dir: &Path) -> Result<Option<DownloadTask>> {
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(STATE_EXT) {
+                let json = tokio::fs::read_to_string(&path).await?;
+                if let Ok(task) = serde_json::from_str::<DownloadTask>(&json) {
+                    if task.url == url {
+                        return Ok(Some(task));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Find all state files in a directory
 pub async fn find_all_states(dir: &Path) -> Result<Vec<DownloadTask>> {
     let mut tasks = Vec::new();
+    if !dir.exists() {
+        return Ok(tasks);
+    }
     let mut entries = tokio::fs::read_dir(dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
