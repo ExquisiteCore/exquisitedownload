@@ -114,9 +114,25 @@ jobs:
             release/${{ matrix.target.asset_name }}.zip
           if-no-files-found: warn
 
+  extension:
+    name: Package Chrome Extension
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create extension zip
+        run: cd extension && zip -r ../edl-chrome-extension.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: edl-chrome-extension
+          path: edl-chrome-extension.zip
+
   release:
     name: Publish Release
-    needs: build
+    needs: [build, extension]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -170,6 +186,7 @@ jobs:
           echo "| Windows x86_64 | \`edl-windows-amd64.exe.zip\` |" >> changelog.md
           echo "| macOS x86_64 | \`edl-macos-amd64.tar.gz\` |" >> changelog.md
           echo "| macOS ARM64 | \`edl-macos-arm64.tar.gz\` |" >> changelog.md
+          echo "| Chrome 扩展 | \`edl-chrome-extension.zip\` |" >> changelog.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
