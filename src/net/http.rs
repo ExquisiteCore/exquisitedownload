@@ -7,6 +7,7 @@ pub struct FileMetadata {
     pub content_length: Option<u64>,
     pub supports_range: bool,
     pub filename: Option<String>,
+    pub etag: Option<String>,
 }
 
 /// Build a configured HTTP client
@@ -45,10 +46,16 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
 
     let filename = extract_filename(headers, url);
 
+    let etag = headers
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
     Ok(FileMetadata {
         content_length,
         supports_range,
         filename,
+        etag,
     })
 }
 

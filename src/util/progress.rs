@@ -1,6 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use super::speed::format_bytes;
@@ -32,11 +29,6 @@ pub fn create_unknown_size_progress(mp: &MultiProgress, filename: &str) -> Progr
     );
     pb.set_prefix(truncate_filename(filename, 20));
     pb
-}
-
-/// Create a shared downloaded bytes counter
-pub fn create_byte_counter() -> Arc<AtomicU64> {
-    Arc::new(AtomicU64::new(0))
 }
 
 /// Print a summary line after download completes

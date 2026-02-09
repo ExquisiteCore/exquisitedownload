@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::download_core::engine::DownloadEngine;
+use crate::download_core::task::TaskStatus;
 
 type SharedEngine = Arc<DownloadEngine>;
 
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
+    #[allow(dead_code)]
     jsonrpc: String,
     id: serde_json::Value,
     method: String,
@@ -67,7 +69,7 @@ async fn handle_rpc(
 }
 
 async fn dispatch(
-    engine: &DownloadEngine,
+    engine: &Arc<DownloadEngine>,
     method: &str,
     params: &serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
@@ -90,36 +92,38 @@ async fn dispatch(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(8) as u8;
 
+            // Non-blocking: spawns download in background, returns task_id immediately
             let task_id = engine
-                .download(url.to_string(), out, None, split, 8, None)
+                .download_background(url.to_string(), out, None, split, 8)
                 .await?;
 
             Ok(serde_json::json!(task_id))
         }
 
         "pause" => {
-            let task_id = params
-                .get(0)
-                .or_else(|| params.get("gid"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing task id"))?;
-
+            let task_id = extract_task_id(params)?;
             engine.pause_task(task_id).await?;
             Ok(serde_json::json!(task_id))
         }
 
-        "tellStatus" => {
-            let task_id = params
-                .get(0)
-                .or_else(|| params.get("gid"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing task id"))?;
+        "unpause" => {
+            let task_id = extract_task_id(params)?;
+            engine.resume_task(task_id).await?;
+            Ok(serde_json::json!(task_id))
+        }
 
+        "remove" => {
+            let task_id = extract_task_id(params)?;
+            engine.remove_task(task_id).await?;
+            Ok(serde_json::json!(task_id))
+        }
+
+        "tellStatus" => {
+            let task_id = extract_task_id(params)?;
             let task = engine
                 .get_task(task_id)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("task not found"))?;
-
             Ok(serde_json::to_value(task)?)
         }
 
@@ -127,7 +131,7 @@ async fn dispatch(
             let tasks = engine.list_tasks().await;
             let active: Vec<_> = tasks
                 .into_iter()
-                .filter(|t| t.status == crate::download_core::task::TaskStatus::Downloading)
+                .filter(|t| t.status == TaskStatus::Downloading)
                 .collect();
             Ok(serde_json::to_value(active)?)
         }
@@ -136,7 +140,7 @@ async fn dispatch(
             let tasks = engine.list_tasks().await;
             let waiting: Vec<_> = tasks
                 .into_iter()
-                .filter(|t| t.status == crate::download_core::task::TaskStatus::Pending)
+                .filter(|t| t.status == TaskStatus::Pending)
                 .collect();
             Ok(serde_json::to_value(waiting)?)
         }
@@ -148,9 +152,7 @@ async fn dispatch(
                 .filter(|t| {
                     matches!(
                         t.status,
-                        crate::download_core::task::TaskStatus::Completed
-                            | crate::download_core::task::TaskStatus::Error
-                            | crate::download_core::task::TaskStatus::Paused
+                        TaskStatus::Completed | TaskStatus::Error | TaskStatus::Paused
                     )
                 })
                 .collect();
@@ -176,6 +178,14 @@ async fn dispatch(
 
         _ => Err(anyhow::anyhow!("unknown method: {}", method)),
     }
+}
+
+fn extract_task_id(params: &serde_json::Value) -> anyhow::Result<&str> {
+    params
+        .get(0)
+        .or_else(|| params.get("gid"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing task id"))
 }
 
 /// Start the JSON-RPC server

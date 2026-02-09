@@ -45,6 +45,7 @@ impl Segment {
     }
 
     /// Remaining bytes to download
+    #[allow(dead_code)]
     pub fn remaining(&self) -> u64 {
         self.size().saturating_sub(self.downloaded)
     }

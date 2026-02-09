@@ -18,6 +18,7 @@ pub async fn save_state(task: &DownloadTask, dir: &Path) -> Result<()> {
 }
 
 /// Load task state from a state file
+#[allow(dead_code)]
 pub async fn load_state(task_id: &str, dir: &Path) -> Result<Option<DownloadTask>> {
     let state_path = dir.join(format!("{}{}", task_id, STATE_EXT));
     if !state_path.exists() {
@@ -65,6 +66,7 @@ pub async fn find_state_by_url(url: &str, dir: &Path) -> Result<Option<DownloadT
 }
 
 /// Find all state files in a directory
+#[allow(dead_code)]
 pub async fn find_all_states(dir: &Path) -> Result<Vec<DownloadTask>> {
     let mut tasks = Vec::new();
     if !dir.exists() {

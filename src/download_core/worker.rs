@@ -1,10 +1,12 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use reqwest::Client;
 use tokio::io::AsyncWriteExt;
+
+use crate::util::speed::SpeedLimiter;
 
 use super::segment::{Segment, SegmentStatus};
 
@@ -19,13 +21,42 @@ pub async fn download_segment(
     download_dir: &std::path::Path,
     task_id: &str,
     cancel_flag: &AtomicBool,
-    speed_limiter: Option<&Arc<AtomicU64>>,
+    speed_limiter: Option<&Arc<SpeedLimiter>>,
+    on_progress: &ProgressCallback,
+    retry_count: u32,
+) -> Result<()> {
+    let mut last_err = None;
+    for attempt in 0..=retry_count {
+        if attempt > 0 {
+            tracing::warn!("segment {}: retry {}/{}", segment.index, attempt, retry_count);
+            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt.min(4)))).await;
+        }
+        match download_segment_once(client, url, segment, download_dir, task_id, cancel_flag, speed_limiter, on_progress).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if cancel_flag.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+async fn download_segment_once(
+    client: &Client,
+    url: &str,
+    segment: &mut Segment,
+    download_dir: &std::path::Path,
+    task_id: &str,
+    cancel_flag: &AtomicBool,
+    speed_limiter: Option<&Arc<SpeedLimiter>>,
     on_progress: &ProgressCallback,
 ) -> Result<()> {
     let temp_path = download_dir.join(segment.temp_filename(task_id));
 
-    // When resuming, trust the actual file size on disk over state counter,
-    // because the process may have been killed between a file write and a state save.
+    // When resuming, trust the actual file size on disk over state counter
     if temp_path.exists() {
         let file_len = tokio::fs::metadata(&temp_path)
             .await
@@ -42,18 +73,16 @@ pub async fn download_segment(
         }
     }
 
-    // Already complete?
     if segment.is_complete() {
         segment.status = SegmentStatus::Completed;
         return Ok(());
     }
 
     let resume_from = segment.resume_offset();
-    let end_byte = segment.end - 1; // Range header is inclusive
+    let end_byte = segment.end - 1;
 
     let mut request = client.get(url);
 
-    // Set Range header
     if segment.start > 0 || segment.end < u64::MAX {
         request = request.header(
             reqwest::header::RANGE,
@@ -73,7 +102,6 @@ pub async fn download_segment(
 
     segment.status = SegmentStatus::Downloading;
 
-    // Open file for append if resuming, otherwise create new
     let mut file = if segment.downloaded > 0 {
         tokio::fs::OpenOptions::new()
             .append(true)
@@ -96,14 +124,10 @@ pub async fn download_segment(
         let chunk = chunk.context("error reading chunk")?;
         let chunk_len = chunk.len() as u64;
 
-        // Speed limiting: simple delay-based throttling
+        // Shared token-bucket speed limiting
         if let Some(limiter) = speed_limiter {
-            let limit = limiter.load(Ordering::Relaxed);
-            if limit > 0 {
-                let delay_ms = (chunk_len * 1000) / limit;
-                if delay_ms > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                }
+            if let Some(delay) = limiter.consume(chunk_len) {
+                tokio::time::sleep(delay).await;
             }
         }
 

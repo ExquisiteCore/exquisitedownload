@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Token-bucket style speed limiter
+/// Token-bucket style speed limiter shared across all workers
 pub struct SpeedLimiter {
     /// Max bytes per second (0 = unlimited)
     limit: AtomicU64,
@@ -29,8 +28,7 @@ impl SpeedLimiter {
         self.limit.load(Ordering::Relaxed)
     }
 
-    /// Return the delay needed before consuming `bytes` more.
-    /// Returns None if no delay is needed.
+    /// Consume `bytes` from the bucket. Returns delay to wait if over limit.
     pub fn consume(&self, bytes: u64) -> Option<Duration> {
         let limit = self.limit.load(Ordering::Relaxed);
         if limit == 0 {
@@ -50,52 +48,12 @@ impl SpeedLimiter {
         let total = prev + bytes;
 
         if total > limit {
-            // Calculate how long we need to wait
             let overshoot = total - limit;
             let delay_ms = (overshoot as f64 / limit as f64 * 1000.0) as u64;
             Some(Duration::from_millis(delay_ms.max(1)))
         } else {
             None
         }
-    }
-}
-
-/// Speed tracker for display purposes
-pub struct SpeedTracker {
-    samples: Vec<(Instant, u64)>,
-    total_bytes: u64,
-}
-
-impl SpeedTracker {
-    pub fn new() -> Self {
-        Self {
-            samples: Vec::new(),
-            total_bytes: 0,
-        }
-    }
-
-    pub fn record(&mut self, bytes: u64) {
-        let now = Instant::now();
-        self.total_bytes += bytes;
-        self.samples.push((now, bytes));
-
-        // Keep only last 5 seconds of samples
-        let cutoff = now - Duration::from_secs(5);
-        self.samples.retain(|(t, _)| *t >= cutoff);
-    }
-
-    /// Current speed in bytes/sec (average over last 5 seconds)
-    pub fn speed_bps(&self) -> f64 {
-        if self.samples.len() < 2 {
-            return 0.0;
-        }
-        let first = self.samples.first().unwrap().0;
-        let elapsed = self.samples.last().unwrap().0.duration_since(first);
-        if elapsed.is_zero() {
-            return 0.0;
-        }
-        let bytes: u64 = self.samples.iter().map(|(_, b)| b).sum();
-        bytes as f64 / elapsed.as_secs_f64()
     }
 }
 
@@ -123,9 +81,4 @@ pub fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{} B", bytes)
     }
-}
-
-/// Create a shared speed limiter as Arc<AtomicU64> for worker compatibility
-pub fn create_speed_limit_value(limit: Option<u64>) -> Arc<AtomicU64> {
-    Arc::new(AtomicU64::new(limit.unwrap_or(0)))
 }
