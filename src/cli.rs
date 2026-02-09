@@ -72,6 +72,14 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub checksum: Option<String>,
 
+    /// Custom HTTP header (can be used multiple times, e.g., --header "Authorization: Bearer xxx")
+    #[arg(long, num_args = 1)]
+    pub header: Vec<String>,
+
+    /// Cookie string (shorthand for --header "Cookie: ...")
+    #[arg(long)]
+    pub cookie: Option<String>,
+
     /// HTTP/HTTPS/SOCKS5 proxy (e.g., http://127.0.0.1:7890, socks5://...)
     #[arg(long)]
     pub proxy: Option<String>,

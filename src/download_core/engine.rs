@@ -34,7 +34,7 @@ pub struct DownloadEngine {
 
 impl DownloadEngine {
     pub fn new(config: Config) -> Result<Self> {
-        let client = http::build_client(&config.user_agent, config.timeout_secs, None)?;
+        let client = http::build_client(&config.user_agent, config.timeout_secs, None, None)?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
         let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
 
@@ -49,9 +49,13 @@ impl DownloadEngine {
         })
     }
 
-    /// Create engine with a custom proxy
-    pub fn with_proxy(config: Config, proxy: Option<&str>) -> Result<Self> {
-        let client = http::build_client(&config.user_agent, config.timeout_secs, proxy)?;
+    /// Create engine with a custom proxy and headers
+    pub fn with_options(
+        config: Config,
+        proxy: Option<&str>,
+        headers: Option<reqwest::header::HeaderMap>,
+    ) -> Result<Self> {
+        let client = http::build_client(&config.user_agent, config.timeout_secs, proxy, headers)?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
         let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
 

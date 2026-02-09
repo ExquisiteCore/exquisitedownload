@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 /// File metadata obtained from a HEAD request
 #[derive(Debug)]
@@ -12,8 +13,33 @@ pub struct FileMetadata {
     pub final_url: Option<String>,
 }
 
-/// Build a configured HTTP client with optional proxy
-pub fn build_client(user_agent: &str, timeout_secs: u64, proxy: Option<&str>) -> Result<Client> {
+/// Parse "Key: Value" header strings into a HeaderMap
+pub fn parse_headers(headers: &[String], cookie: Option<&str>) -> Result<HeaderMap> {
+    let mut map = HeaderMap::new();
+    for h in headers {
+        let (key, value) = h.split_once(':').ok_or_else(|| {
+            anyhow::anyhow!("invalid header format: '{}' (expected 'Key: Value')", h)
+        })?;
+        let name = HeaderName::from_bytes(key.trim().as_bytes())
+            .with_context(|| format!("invalid header name: '{}'", key.trim()))?;
+        let val = HeaderValue::from_str(value.trim())
+            .with_context(|| format!("invalid header value: '{}'", value.trim()))?;
+        map.append(name, val);
+    }
+    if let Some(cookie_str) = cookie {
+        let val = HeaderValue::from_str(cookie_str).context("invalid cookie value")?;
+        map.insert(reqwest::header::COOKIE, val);
+    }
+    Ok(map)
+}
+
+/// Build a configured HTTP client with optional proxy and custom headers
+pub fn build_client(
+    user_agent: &str,
+    timeout_secs: u64,
+    proxy: Option<&str>,
+    default_headers: Option<HeaderMap>,
+) -> Result<Client> {
     let mut builder = Client::builder()
         .user_agent(user_agent)
         .timeout(std::time::Duration::from_secs(timeout_secs));
@@ -21,6 +47,10 @@ pub fn build_client(user_agent: &str, timeout_secs: u64, proxy: Option<&str>) ->
     if let Some(proxy_url) = proxy {
         let proxy = reqwest::Proxy::all(proxy_url).context("invalid proxy URL")?;
         builder = builder.proxy(proxy);
+    }
+
+    if let Some(headers) = default_headers {
+        builder = builder.default_headers(headers);
     }
 
     builder.build().context("failed to build HTTP client")
@@ -141,5 +171,56 @@ mod tests {
             parse_content_disposition("attachment; filename*=UTF-8''%E6%B5%8B%E8%AF%95.zip"),
             Some("测试.zip".to_string())
         );
+    }
+
+    #[test]
+    fn test_parse_content_disposition_no_filename() {
+        assert_eq!(parse_content_disposition("inline"), None);
+    }
+
+    #[test]
+    fn test_parse_content_disposition_unquoted() {
+        assert_eq!(
+            parse_content_disposition("attachment; filename=test.zip"),
+            Some("test.zip".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_headers_basic() {
+        let headers = vec![
+            "Authorization: Bearer token123".to_string(),
+            "Accept: application/json".to_string(),
+        ];
+        let map = parse_headers(&headers, None).unwrap();
+        assert_eq!(map.get("authorization").unwrap(), "Bearer token123");
+        assert_eq!(map.get("accept").unwrap(), "application/json");
+    }
+
+    #[test]
+    fn test_parse_headers_with_cookie() {
+        let headers = vec![];
+        let map = parse_headers(&headers, Some("sid=abc; token=xyz")).unwrap();
+        assert_eq!(map.get("cookie").unwrap(), "sid=abc; token=xyz");
+    }
+
+    #[test]
+    fn test_parse_headers_cookie_and_custom() {
+        let headers = vec!["X-Custom: value".to_string()];
+        let map = parse_headers(&headers, Some("session=123")).unwrap();
+        assert_eq!(map.get("x-custom").unwrap(), "value");
+        assert_eq!(map.get("cookie").unwrap(), "session=123");
+    }
+
+    #[test]
+    fn test_parse_headers_invalid_format() {
+        let headers = vec!["no-colon-here".to_string()];
+        assert!(parse_headers(&headers, None).is_err());
+    }
+
+    #[test]
+    fn test_parse_headers_empty() {
+        let map = parse_headers(&[], None).unwrap();
+        assert!(map.is_empty());
     }
 }

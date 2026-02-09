@@ -79,3 +79,77 @@ async fn compute_hash(path: &Path, algo: &str) -> Result<String> {
         _ => anyhow::bail!("unsupported algorithm: {}", algo),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_checksum_sha256() {
+        let (algo, hash) = parse_checksum("sha256=abc123").unwrap();
+        assert_eq!(algo, "sha256");
+        assert_eq!(hash, "abc123");
+    }
+
+    #[test]
+    fn test_parse_checksum_md5() {
+        let (algo, hash) = parse_checksum("md5=deadbeef").unwrap();
+        assert_eq!(algo, "md5");
+        assert_eq!(hash, "deadbeef");
+    }
+
+    #[test]
+    fn test_parse_checksum_sha1() {
+        let (algo, hash) = parse_checksum("sha1=0123456789abcdef").unwrap();
+        assert_eq!(algo, "sha1");
+        assert_eq!(hash, "0123456789abcdef");
+    }
+
+    #[test]
+    fn test_parse_checksum_invalid_format() {
+        assert!(parse_checksum("noequalssign").is_err());
+    }
+
+    #[test]
+    fn test_parse_checksum_unsupported_algo() {
+        assert!(parse_checksum("crc32=12345678").is_err());
+    }
+
+    #[test]
+    fn test_parse_checksum_whitespace() {
+        let (algo, hash) = parse_checksum(" sha256 = abc123 ").unwrap();
+        assert_eq!(algo, "sha256");
+        assert_eq!(hash, "abc123");
+    }
+
+    #[tokio::test]
+    async fn test_verify_file_sha256() {
+        let dir = std::env::temp_dir().join("edl_test_checksum");
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let path = dir.join("test_sha256.txt");
+        tokio::fs::write(&path, b"hello world").await.unwrap();
+
+        // sha256 of "hello world"
+        let expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        verify_file(&path, "sha256", expected).await.unwrap();
+
+        // Wrong hash should fail
+        assert!(verify_file(&path, "sha256", "wrong").await.is_err());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn test_verify_file_md5() {
+        let dir = std::env::temp_dir().join("edl_test_checksum_md5");
+        let _ = tokio::fs::create_dir_all(&dir).await;
+        let path = dir.join("test_md5.txt");
+        tokio::fs::write(&path, b"hello world").await.unwrap();
+
+        // md5 of "hello world"
+        let expected = "5eb63bbbe01eeed093cb22bb8f5acdc3";
+        verify_file(&path, "md5", expected).await.unwrap();
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+}

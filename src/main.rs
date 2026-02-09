@@ -46,7 +46,15 @@ async fn main() -> Result<()> {
             let proxy = args.proxy.or(config.proxy.take());
             let on_complete = args.on_complete.or(config.on_complete.take());
 
-            let engine = DownloadEngine::with_proxy(config, proxy.as_deref())?;
+            // Parse custom headers and cookie
+            let custom_headers = net::http::parse_headers(&args.header, args.cookie.as_deref())?;
+            let headers = if custom_headers.is_empty() {
+                None
+            } else {
+                Some(custom_headers)
+            };
+
+            let engine = DownloadEngine::with_options(config, proxy.as_deref(), headers)?;
 
             let task_id = engine
                 .download(

@@ -82,3 +82,58 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{} B", bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.00 KB");
+        assert_eq!(format_bytes(1536), "1.50 KB");
+        assert_eq!(format_bytes(1024 * 1024), "1.00 MB");
+        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GB");
+    }
+
+    #[test]
+    fn test_format_speed() {
+        assert_eq!(format_speed(0.0), "0 B/s");
+        assert_eq!(format_speed(512.0), "512 B/s");
+        assert_eq!(format_speed(1024.0), "1.0 KB/s");
+        assert_eq!(format_speed(1024.0 * 1024.0), "1.0 MB/s");
+        assert_eq!(format_speed(1024.0 * 1024.0 * 1024.0), "1.0 GB/s");
+    }
+
+    #[test]
+    fn test_speed_limiter_unlimited() {
+        let limiter = SpeedLimiter::new(0);
+        assert!(limiter.consume(1024).is_none());
+        assert!(limiter.consume(999999).is_none());
+    }
+
+    #[test]
+    fn test_speed_limiter_under_limit() {
+        let limiter = SpeedLimiter::new(10000);
+        assert!(limiter.consume(5000).is_none());
+    }
+
+    #[test]
+    fn test_speed_limiter_over_limit() {
+        let limiter = SpeedLimiter::new(1000);
+        // First consume is under limit
+        assert!(limiter.consume(500).is_none());
+        // Second consume puts us over
+        let delay = limiter.consume(600);
+        assert!(delay.is_some());
+    }
+
+    #[test]
+    fn test_speed_limiter_set_limit() {
+        let limiter = SpeedLimiter::new(1000);
+        assert_eq!(limiter.limit(), 1000);
+        limiter.set_limit(2000);
+        assert_eq!(limiter.limit(), 2000);
+    }
+}
