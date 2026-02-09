@@ -63,6 +63,28 @@ edl rpc
 edl rpc --listen 0.0.0.0:6800 --secret mysecret
 ```
 
+### 后台运行
+
+```bash
+# 后台启动（不占终端）
+edl rpc -D
+
+# 带密钥后台启动
+edl rpc -D --secret mysecret
+
+# 停止后台进程
+edl rpc --stop
+
+# 注册开机自启（Windows: 计划任务 / Linux: systemd / macOS: launchd）
+edl rpc --install
+
+# 带密钥注册开机自启
+edl rpc --install --secret mysecret
+
+# 取消开机自启
+edl rpc --uninstall
+```
+
 ### 任务管理（通过 RPC）
 
 ```bash
@@ -99,6 +121,10 @@ edl rpc [OPTIONS]
 Options:
       --listen <ADDR>        监听地址 [默认: 127.0.0.1:6800]
       --secret <TOKEN>       RPC 认证密钥
+  -D, --daemon               后台运行（不占终端）
+      --stop                 停止后台进程
+      --install              注册开机自启
+      --uninstall            取消开机自启
 ```
 
 ## 配置文件

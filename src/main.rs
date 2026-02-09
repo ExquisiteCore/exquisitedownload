@@ -1,5 +1,6 @@
 mod cli;
 mod config;
+mod daemon;
 mod download_core;
 mod net;
 mod rpc;
@@ -95,10 +96,33 @@ async fn main() -> Result<()> {
         }
 
         Commands::Rpc(args) => {
+            if args.stop {
+                daemon::stop_daemon()?;
+                return Ok(());
+            }
+            if args.install {
+                daemon::install_service(&args)?;
+                return Ok(());
+            }
+            if args.uninstall {
+                daemon::uninstall_service()?;
+                return Ok(());
+            }
+            if args.daemon {
+                daemon::daemonize()?;
+                return Ok(());
+            }
+
+            // Write PID file for foreground mode too, clean up on exit
+            daemon::write_pid()?;
+
             // CLI --secret overrides config file
             let secret = args.secret.or(config.rpc_secret.take());
             let engine = Arc::new(DownloadEngine::new(config)?);
-            rpc::server::start_rpc_server(engine, &args.listen, secret).await?;
+            let result = rpc::server::start_rpc_server(engine, &args.listen, secret).await;
+
+            daemon::remove_pid();
+            result?;
         }
 
         Commands::Status => {

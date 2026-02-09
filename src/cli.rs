@@ -98,4 +98,20 @@ pub struct RpcArgs {
     /// RPC secret token
     #[arg(long)]
     pub secret: Option<String>,
+
+    /// Run as background daemon
+    #[arg(long, short = 'D')]
+    pub daemon: bool,
+
+    /// Stop running daemon
+    #[arg(long)]
+    pub stop: bool,
+
+    /// Register as auto-start service (on login)
+    #[arg(long)]
+    pub install: bool,
+
+    /// Unregister auto-start service
+    #[arg(long)]
+    pub uninstall: bool,
 }
