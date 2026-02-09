@@ -156,12 +156,12 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
         .to_string();
 
     // Build the rpc command string
-    let mut rpc_cmd = format!("{} rpc", exe);
     // Windows uses -D flag for hidden background process
+    // Quotes around exe path for CreateProcess to handle spaces correctly
     #[cfg(target_os = "windows")]
-    {
-        rpc_cmd = format!("{} rpc -D", exe);
-    }
+    let mut rpc_cmd = format!("\"{}\" rpc -D", exe);
+    #[cfg(not(target_os = "windows"))]
+    let mut rpc_cmd = format!("{} rpc", exe);
     if args.listen != "127.0.0.1:6800" {
         rpc_cmd.push_str(&format!(" --listen {}", args.listen));
     }
