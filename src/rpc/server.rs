@@ -6,7 +6,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::core::engine::DownloadEngine;
+use crate::download_core::engine::DownloadEngine;
 
 type SharedEngine = Arc<DownloadEngine>;
 
@@ -127,7 +127,7 @@ async fn dispatch(
             let tasks = engine.list_tasks().await;
             let active: Vec<_> = tasks
                 .into_iter()
-                .filter(|t| t.status == crate::core::task::TaskStatus::Downloading)
+                .filter(|t| t.status == crate::download_core::task::TaskStatus::Downloading)
                 .collect();
             Ok(serde_json::to_value(active)?)
         }
@@ -136,7 +136,7 @@ async fn dispatch(
             let tasks = engine.list_tasks().await;
             let waiting: Vec<_> = tasks
                 .into_iter()
-                .filter(|t| t.status == crate::core::task::TaskStatus::Pending)
+                .filter(|t| t.status == crate::download_core::task::TaskStatus::Pending)
                 .collect();
             Ok(serde_json::to_value(waiting)?)
         }
@@ -148,9 +148,9 @@ async fn dispatch(
                 .filter(|t| {
                     matches!(
                         t.status,
-                        crate::core::task::TaskStatus::Completed
-                            | crate::core::task::TaskStatus::Error
-                            | crate::core::task::TaskStatus::Paused
+                        crate::download_core::task::TaskStatus::Completed
+                            | crate::download_core::task::TaskStatus::Error
+                            | crate::download_core::task::TaskStatus::Paused
                     )
                 })
                 .collect();

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::core::task::DownloadTask;
+use crate::download_core::task::DownloadTask;
 
 /// State file extension
 const STATE_EXT: &str = ".edl.state";
