@@ -1,7 +1,12 @@
 [package]
 name = "exquisite-download"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2024"
+description = "High-performance multi-connection HTTP download manager with segmented downloading, resume support, and JSON-RPC control"
+authors = ["ExquisiteCore <xiaolongqq1y@163.com>"]
+license = "MIT"
+repository = "https://github.com/ExquisiteCore/exquisitedownload"
+readme = "README.md"
 
 [[bin]]
 name = "edl"

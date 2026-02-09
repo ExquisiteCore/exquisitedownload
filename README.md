@@ -21,10 +21,10 @@
 ## 安装
 
 ```bash
-cargo install --path .
+cargo install exquisite-download
 ```
 
-或从 [GitHub Releases](https://github.com/nicexiaolong/exquisitedownload/releases) 下载预编译二进制文件。
+或从 [GitHub Releases](https://github.com/ExquisiteCore/exquisitedownload/releases) 下载预编译二进制文件。
 
 ## 快速开始
 
@@ -232,7 +232,7 @@ curl -X POST http://127.0.0.1:6800/jsonrpc \
 
 **方式一：从 Release 下载**
 
-1. 前往 [GitHub Releases](https://github.com/nicexiaolong/exquisitedownload/releases) 下载 `edl-chrome-extension.zip`
+1. 前往 [GitHub Releases](https://github.com/ExquisiteCore/exquisitedownload/releases) 下载 `edl-chrome-extension.zip`
 2. 解压到任意目录
 3. 打开 Chrome，进入 `chrome://extensions/`
 4. 开启右上角**开发者模式**
