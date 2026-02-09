@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 420px;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 13px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 20px;
+    }
+    h2 {
+      font-size: 16px;
+      margin-bottom: 16px;
+      color: #93c5fd;
+    }
+    .form-group {
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      margin-bottom: 4px;
+      color: #aaa;
+      font-size: 12px;
+    }
+    input[type="text"], input[type="number"], input[type="password"] {
+      width: 100%;
+      background: #16162a;
+      border: 1px solid #2a2a4a;
+      color: #e0e0e0;
+      padding: 7px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus { border-color: #3b82f6; }
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+    }
+    .switch-label { font-size: 13px; }
+    .switch {
+      position: relative;
+      width: 40px;
+      height: 22px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      inset: 0;
+      background: #444;
+      border-radius: 22px;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      left: 3px;
+      top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+    .switch input:checked + .slider { background: #2563eb; }
+    .switch input:checked + .slider::before { transform: translateX(18px); }
+    .hint {
+      font-size: 11px;
+      color: #666;
+      margin-top: 2px;
+    }
+    .actions {
+      margin-top: 18px;
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      padding: 8px 20px;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    .btn-test {
+      background: transparent;
+      border: 1px solid #444;
+      color: #aaa;
+    }
+    .btn-test:hover { border-color: #3b82f6; color: #3b82f6; }
+    .msg {
+      margin-top: 10px;
+      font-size: 12px;
+      min-height: 18px;
+    }
+    .msg.ok { color: #22c55e; }
+    .msg.err { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <h2>ExquisiteDownload 设置</h2>
+
+  <div class="form-group">
+    <label>RPC 地址</label>
+    <input type="text" id="rpcUrl" placeholder="http://127.0.0.1:6800/jsonrpc" />
+  </div>
+
+  <div class="form-group">
+    <label>RPC 密钥</label>
+    <input type="password" id="rpcSecret" placeholder="留空则不启用认证" />
+  </div>
+
+  <div class="form-group">
+    <div class="switch-row">
+      <span class="switch-label">自动拦截浏览器下载</span>
+      <label class="switch">
+        <input type="checkbox" id="autoIntercept" />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <label>最小拦截文件大小 (字节)</label>
+    <input type="number" id="minFileSize" min="0" />
+    <div class="hint">小于此大小的文件不会被拦截（默认 1048576 = 1MB）</div>
+  </div>
+
+  <div class="form-group">
+    <label>拦截文件类型</label>
+    <input type="text" id="fileTypes" />
+    <div class="hint">逗号分隔的扩展名，如 .zip,.exe,.mp4</div>
+  </div>
+
+  <div class="actions">
+    <button id="saveBtn">保存</button>
+    <button id="testBtn" class="btn-test">测试连接</button>
+  </div>
+  <div class="msg" id="msg"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>

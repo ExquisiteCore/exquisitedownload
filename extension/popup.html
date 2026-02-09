@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="title">
+      <span class="status-dot" id="statusDot"></span>
+      <span>ExquisiteDownload</span>
+    </div>
+    <div class="stats" id="stats">
+      <span class="stat"><span class="stat-num" id="statActive">-</span> 活跃</span>
+      <span class="stat"><span class="stat-num" id="statWaiting">-</span> 等待</span>
+      <span class="stat"><span class="stat-num" id="statStopped">-</span> 完成</span>
+    </div>
+  </div>
+
+  <div class="task-list" id="taskList">
+    <div class="empty" id="emptyMsg">暂无任务</div>
+  </div>
+
+  <div class="add-bar">
+    <input type="text" id="urlInput" placeholder="输入 URL 下载..." />
+    <button id="addBtn" title="添加下载">+</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
