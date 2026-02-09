@@ -1,0 +1,36 @@
+# ExquisiteDownload (edl) 配置文件
+# 以 # 开头的行为注释，取消注释即可覆盖默认值
+
+# 最大同时下载任务数
+# max_concurrent_tasks = 5
+
+# 每个任务的最大连接数
+# max_connections_per_task = 8
+
+# 默认下载目录
+# download_dir = "C:\\Users\\xiaol\\Downloads"
+
+# 全局限速（如 "1M", "500K", "0" 为不限速）
+# max_speed = "0"
+
+# RPC 服务器监听地址
+# rpc_listen_addr = "127.0.0.1:6800"
+
+# RPC 认证密钥（留空则不启用认证）
+# rpc_secret = "your_secret_here"
+
+# HTTP User-Agent
+# user_agent = "ExquisiteDownload/0.1.0"
+
+# 连接超时时间（秒）
+# timeout_secs = 30
+
+# 失败重试次数
+# retry_count = 3
+
+# HTTP/HTTPS/SOCKS5 代理
+# proxy = "http://127.0.0.1:7890"
+
+# 下载完成后执行的命令
+# 支持占位符：{file} 文件路径, {size} 文件大小, {id} 任务ID
+# on_complete = "notify-send '下载完成' '{file}'"

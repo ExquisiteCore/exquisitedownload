@@ -62,11 +62,26 @@ impl Default for Config {
     }
 }
 
-/// Get the config file path: ~/.config/edl/config.toml (or platform equivalent)
+/// Get the config file path.
+/// Windows: same directory as the executable (e.g., D:\edl\config.toml)
+/// Other OS: ~/.config/edl/config.toml
 pub fn config_path() -> PathBuf {
-    directories::ProjectDirs::from("", "", "edl")
-        .map(|dirs| dirs.config_dir().join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from("edl.config.toml"))
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                return dir.join("config.toml");
+            }
+        }
+        PathBuf::from("config.toml")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        directories::ProjectDirs::from("", "", "edl")
+            .map(|dirs| dirs.config_dir().join("config.toml"))
+            .unwrap_or_else(|| PathBuf::from("edl.config.toml"))
+    }
 }
 
 /// Load config from file, falling back to defaults for missing fields.
