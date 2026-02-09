@@ -16,6 +16,7 @@
 - **下载完成通知** — 下载完成后执行自定义命令
 - **配置文件** — TOML 格式持久化配置，CLI 参数可覆盖
 - **下载队列** — 并发任务数限制，自动排队
+- **Chrome 浏览器扩展** — 拦截浏览器下载、右键菜单一键发送到 edl、弹窗任务管理
 
 ## 安装
 
@@ -197,6 +198,67 @@ curl -X POST http://127.0.0.1:6800/jsonrpc \
   -d '{"jsonrpc":"2.0","id":"1","method":"tellStatus","params":["<task_id>"]}'
 ```
 
+## Chrome 浏览器扩展
+
+配套 Chrome 扩展可以拦截浏览器下载并转发给 edl，也可以通过右键菜单和弹窗手动管理任务。
+
+### 安装扩展
+
+**方式一：从 Release 下载**
+
+1. 前往 [GitHub Releases](https://github.com/nicexiaolong/exquisitedownload/releases) 下载 `edl-chrome-extension.zip`
+2. 解压到任意目录
+3. 打开 Chrome，进入 `chrome://extensions/`
+4. 开启右上角**开发者模式**
+5. 点击**加载已解压的扩展程序**，选择解压后的文件夹
+
+**方式二：从源码加载**
+
+1. 克隆项目仓库
+2. 打开 `chrome://extensions/`，开启开发者模式
+3. 点击加载已解压的扩展程序，选择项目下的 `extension/` 目录
+
+### 使用前提
+
+扩展需要 edl RPC 服务正在运行：
+
+```bash
+edl rpc
+# 或指定密钥
+edl rpc --secret mysecret
+```
+
+### 功能说明
+
+**自动拦截下载**
+
+开启后，浏览器中触发的下载会自动被 edl 接管（可在设置中配置文件大小阈值和文件类型过滤）。如果 edl 未运行，会自动回退到浏览器原生下载。
+
+**右键菜单**
+
+在任意链接上右键，选择「使用 edl 下载」即可将链接发送给 edl。
+
+**弹窗任务管理**
+
+点击工具栏图标打开弹窗：
+- 顶部显示 edl 连接状态和全局统计（活跃/等待/完成）
+- 中间为任务列表，可暂停、恢复、删除任务
+- 底部输入框可手动粘贴 URL 添加下载
+
+**扩展设置**
+
+点击弹窗右上角齿轮图标打开设置页，可配置：
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| RPC 地址 | edl RPC 服务地址 | `http://127.0.0.1:6800/jsonrpc` |
+| RPC 密钥 | 对应 `edl rpc --secret` 的密钥 | 空（不认证） |
+| 自动拦截 | 是否自动拦截浏览器下载 | 开启 |
+| 最小文件大小 | 小于此大小的文件不拦截 | 1 MB |
+| 拦截文件类型 | 逗号分隔的扩展名 | `.zip,.exe,.mp4` 等常见格式 |
+
+设置页提供「测试连接」按钮，可验证 RPC 地址和密钥是否正确。
+
 ## 项目结构
 
 ```
@@ -215,11 +277,18 @@ src/
 ├── storage/
 │   └── state.rs           # 断点续传状态持久化
 ├── rpc/
-│   └── server.rs          # JSON-RPC 服务器（Token 认证）
+│   └── server.rs          # JSON-RPC 服务器（Token 认证 + CORS）
 └── util/
     ├── speed.rs           # 限速器与速度格式化
     ├── progress.rs        # 进度条显示
     └── checksum.rs        # 校验和验证（SHA-256/SHA-1/MD5）
+
+extension/                   # Chrome 浏览器扩展
+├── manifest.json            # Manifest V3 配置
+├── background.js            # Service Worker：下载拦截、右键菜单、RPC 通信
+├── popup.html / js / css    # 弹窗界面：任务列表与手动添加
+├── options.html / js        # 设置页面
+└── icons/                   # 扩展图标（16/48/128px）
 ```
 
 ## 技术栈
