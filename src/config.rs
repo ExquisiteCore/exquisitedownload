@@ -153,42 +153,42 @@ fn generate_default_config() -> String {
         .unwrap_or_else(|| ".".to_string());
 
     format!(
-        r#"# ExquisiteDownload (edl) Configuration
-# Lines starting with # are comments. Uncomment to override defaults.
+        r#"# ExquisiteDownload (edl) 配置文件
+# 以 # 开头的行为注释，取消注释即可覆盖默认值
 
-# Maximum concurrent download tasks
+# 最大同时下载任务数
 # max_concurrent_tasks = 5
 
-# Maximum connections per task
+# 每个任务的最大连接数
 # max_connections_per_task = 8
 
-# Default download directory
+# 默认下载目录
 # download_dir = "{download_dir}"
 
-# Global speed limit (e.g., "1M", "500K", "0" for unlimited)
+# 全局限速（如 "1M", "500K", "0" 为不限速）
 # max_speed = "0"
 
-# RPC server listen address
+# RPC 服务器监听地址
 # rpc_listen_addr = "127.0.0.1:6800"
 
-# RPC authentication secret (leave empty to disable)
+# RPC 认证密钥（留空则不启用认证）
 # rpc_secret = "your_secret_here"
 
 # HTTP User-Agent
 # user_agent = "ExquisiteDownload/{version}"
 
-# Connection timeout in seconds
+# 连接超时时间（秒）
 # timeout_secs = 30
 
-# Retry count on failure
+# 失败重试次数
 # retry_count = 3
 
-# HTTP/HTTPS/SOCKS5 proxy
+# HTTP/HTTPS/SOCKS5 代理
 # proxy = "http://127.0.0.1:7890"
 
-# Command to execute after download completes
-# Supports placeholders: {{file}} {{size}} {{id}}
-# on_complete = "notify-send 'Download complete' '{{file}}'"
+# 下载完成后执行的命令
+# 支持占位符：{{file}} 文件路径, {{size}} 文件大小, {{id}} 任务ID
+# on_complete = "notify-send '下载完成' '{{file}}'"
 "#,
         download_dir = download_dir.replace('\\', "\\\\"),
         version = env!("CARGO_PKG_VERSION"),
