@@ -6,24 +6,46 @@
 </head>
 <body>
   <div class="header">
-    <div class="title">
-      <span class="status-dot" id="statusDot"></span>
-      <span>ExquisiteDownload</span>
+    <div class="title-row">
+      <div class="title">
+        <span class="status-dot" id="statusDot"></span>
+        <span>ExquisiteDownload</span>
+      </div>
+      <button class="settings-btn" id="settingsBtn" title="设置">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+        </svg>
+      </button>
     </div>
     <div class="stats" id="stats">
-      <span class="stat"><span class="stat-num" id="statActive">-</span> 活跃</span>
-      <span class="stat"><span class="stat-num" id="statWaiting">-</span> 等待</span>
-      <span class="stat"><span class="stat-num" id="statStopped">-</span> 完成</span>
+      <span class="stat">
+        <span class="stat-num active" id="statActive">-</span>
+        <span class="stat-label">活跃</span>
+      </span>
+      <span class="stat">
+        <span class="stat-num waiting" id="statWaiting">-</span>
+        <span class="stat-label">等待</span>
+      </span>
+      <span class="stat">
+        <span class="stat-num stopped" id="statStopped">-</span>
+        <span class="stat-label">完成</span>
+      </span>
     </div>
   </div>
 
   <div class="task-list" id="taskList">
-    <div class="empty" id="emptyMsg">暂无任务</div>
+    <div class="empty">暂无任务</div>
   </div>
 
   <div class="add-bar">
-    <input type="text" id="urlInput" placeholder="输入 URL 下载..." />
-    <button id="addBtn" title="添加下载">+</button>
+    <input type="text" id="urlInput" placeholder="输入 URL 开始下载..." />
+    <button id="addBtn" title="添加下载">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <line x1="12" y1="5" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
   </div>
 
   <script src="popup.js"></script>

@@ -5,109 +5,167 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      width: 420px;
-      font-family: -apple-system, "Segoe UI", sans-serif;
+      width: 440px;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
       font-size: 13px;
-      background: #1a1a2e;
+      background: #0f0f1e;
       color: #e0e0e0;
-      padding: 20px;
+      padding: 24px;
+    }
+    .page-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .page-header svg {
+      color: #60a5fa;
     }
     h2 {
       font-size: 16px;
-      margin-bottom: 16px;
-      color: #93c5fd;
+      font-weight: 600;
+      color: #e8e8f0;
+      letter-spacing: -0.2px;
     }
     .form-group {
-      margin-bottom: 14px;
+      margin-bottom: 16px;
     }
     label {
       display: block;
-      margin-bottom: 4px;
-      color: #aaa;
+      margin-bottom: 6px;
+      color: #888;
       font-size: 12px;
+      font-weight: 500;
     }
     input[type="text"], input[type="number"], input[type="password"] {
       width: 100%;
-      background: #16162a;
-      border: 1px solid #2a2a4a;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       color: #e0e0e0;
-      padding: 7px 10px;
-      border-radius: 4px;
+      padding: 9px 12px;
+      border-radius: 8px;
       font-size: 13px;
       outline: none;
+      transition: all 0.2s;
     }
-    input:focus { border-color: #3b82f6; }
+    input::placeholder {
+      color: #444;
+    }
+    input:focus {
+      border-color: rgba(59, 130, 246, 0.5);
+      background: rgba(255, 255, 255, 0.06);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+    }
     .switch-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 0;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
     }
-    .switch-label { font-size: 13px; }
+    .switch-label {
+      font-size: 13px;
+      font-weight: 500;
+    }
     .switch {
       position: relative;
-      width: 40px;
-      height: 22px;
+      width: 42px;
+      height: 24px;
     }
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider {
       position: absolute;
       inset: 0;
-      background: #444;
-      border-radius: 22px;
+      background: #333;
+      border-radius: 24px;
       cursor: pointer;
-      transition: 0.3s;
+      transition: 0.25s;
     }
     .slider::before {
       content: "";
       position: absolute;
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       left: 3px;
       top: 3px;
       background: #fff;
       border-radius: 50%;
-      transition: 0.3s;
+      transition: 0.25s;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
     }
     .switch input:checked + .slider { background: #2563eb; }
     .switch input:checked + .slider::before { transform: translateX(18px); }
     .hint {
       font-size: 11px;
-      color: #666;
-      margin-top: 2px;
+      color: #555;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+    .divider {
+      height: 1px;
+      background: rgba(255, 255, 255, 0.06);
+      margin: 20px 0;
     }
     .actions {
-      margin-top: 18px;
+      margin-top: 20px;
       display: flex;
       gap: 10px;
     }
     button {
+      padding: 9px 24px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-save {
       background: #2563eb;
       color: #fff;
       border: none;
-      padding: 8px 20px;
-      border-radius: 4px;
-      font-size: 13px;
-      cursor: pointer;
     }
-    button:hover { background: #1d4ed8; }
+    .btn-save:hover { background: #1d4ed8; }
+    .btn-save:active { transform: scale(0.97); }
     .btn-test {
       background: transparent;
-      border: 1px solid #444;
-      color: #aaa;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #999;
     }
-    .btn-test:hover { border-color: #3b82f6; color: #3b82f6; }
+    .btn-test:hover {
+      border-color: rgba(59, 130, 246, 0.4);
+      color: #60a5fa;
+      background: rgba(59, 130, 246, 0.06);
+    }
     .msg {
-      margin-top: 10px;
+      margin-top: 12px;
       font-size: 12px;
-      min-height: 18px;
+      min-height: 20px;
+      padding: 0 2px;
+      transition: all 0.3s;
     }
-    .msg.ok { color: #22c55e; }
-    .msg.err { color: #ef4444; }
+    .msg.ok {
+      color: #4ade80;
+    }
+    .msg.err {
+      color: #f87171;
+    }
   </style>
 </head>
 <body>
-  <h2>ExquisiteDownload 设置</h2>
+  <div class="page-header">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+    </svg>
+    <h2>ExquisiteDownload 设置</h2>
+  </div>
 
   <div class="form-group">
     <label>RPC 地址</label>
@@ -118,6 +176,8 @@
     <label>RPC 密钥</label>
     <input type="password" id="rpcSecret" placeholder="留空则不启用认证" />
   </div>
+
+  <div class="divider"></div>
 
   <div class="form-group">
     <div class="switch-row">
@@ -132,7 +192,7 @@
   <div class="form-group">
     <label>最小拦截文件大小 (字节)</label>
     <input type="number" id="minFileSize" min="0" />
-    <div class="hint">小于此大小的文件不会被拦截（默认 1048576 = 1MB）</div>
+    <div class="hint">小于此大小的文件不会被拦截，默认 1048576 = 1 MB</div>
   </div>
 
   <div class="form-group">
@@ -142,8 +202,19 @@
   </div>
 
   <div class="actions">
-    <button id="saveBtn">保存</button>
-    <button id="testBtn" class="btn-test">测试连接</button>
+    <button id="saveBtn" class="btn-save">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+      保存
+    </button>
+    <button id="testBtn" class="btn-test">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+      测试连接
+    </button>
   </div>
   <div class="msg" id="msg"></div>
 

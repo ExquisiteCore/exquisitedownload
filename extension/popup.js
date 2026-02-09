@@ -2,11 +2,22 @@
 
 const $ = (id) => document.getElementById(id);
 
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 function formatBytes(bytes) {
   if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + " GB";
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(2) + " MB";
   if (bytes >= 1024) return (bytes / 1024).toFixed(2) + " KB";
   return bytes + " B";
+}
+
+function formatSpeed(bytesPerSec) {
+  if (!bytesPerSec || bytesPerSec <= 0) return "";
+  return formatBytes(bytesPerSec) + "/s";
 }
 
 function getFilename(filePath) {
@@ -48,43 +59,66 @@ async function rpc(method, params = []) {
 }
 
 function renderTask(task) {
-  const filename = getFilename(task.file_path);
+  const filename = escapeHtml(getFilename(task.file_path));
   const totalSize = task.total_size || 0;
   const downloaded = (task.segments || []).reduce(
     (sum, s) => sum + (s.downloaded || 0),
     0
   );
-  const progress =
-    totalSize > 0 ? Math.min((downloaded / totalSize) * 100, 100) : 0;
-  const progressText =
-    totalSize > 0 ? progress.toFixed(1) + "%" : formatBytes(downloaded);
-  const sizeText =
-    totalSize > 0
+
+  const status = task.status || "Pending";
+  const isCompleted = status === "Completed";
+
+  // Force 100% for completed tasks
+  const progress = isCompleted
+    ? 100
+    : totalSize > 0
+      ? Math.min((downloaded / totalSize) * 100, 100)
+      : 0;
+  const progressText = isCompleted
+    ? "100%"
+    : totalSize > 0
+      ? progress.toFixed(1) + "%"
+      : formatBytes(downloaded);
+  const sizeText = isCompleted
+    ? formatBytes(totalSize || downloaded)
+    : totalSize > 0
       ? formatBytes(downloaded) + " / " + formatBytes(totalSize)
       : formatBytes(downloaded);
 
-  const status = task.status || "Pending";
   const isPausable = status === "Downloading";
   const isResumable = status === "Paused" || status === "Error";
 
+  // Speed display for active downloads
+  const speed = task.speed || 0;
+  const speedText = isPausable && speed > 0 ? formatSpeed(speed) : "";
+
+  // Safe task ID for onclick
+  const safeId = escapeHtml(String(task.id));
+
+  // SVG icons for buttons
+  const pauseIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+  const resumeIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>`;
+  const removeIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+
   return `
-    <div class="task-item" data-id="${task.id}">
+    <div class="task-item" data-id="${safeId}">
       <div class="task-top">
         <span class="task-name" title="${filename}">${filename}</span>
         <span class="task-status ${statusClass(status)}">${statusLabel(status)}</span>
       </div>
       <div class="task-mid">
         <div class="progress-bar">
-          <div class="progress-fill" style="width:${progress}%"></div>
+          <div class="progress-fill ${statusClass(status)}" style="width:${progress}%"></div>
         </div>
         <span class="progress-text">${progressText}</span>
       </div>
       <div class="task-bottom">
-        <span class="task-size">${sizeText}</span>
+        <span class="task-size">${sizeText}${speedText ? `<span class="task-speed">${speedText}</span>` : ""}</span>
         <div class="task-actions">
-          ${isPausable ? `<button onclick="pauseTask('${task.id}')">暂停</button>` : ""}
-          ${isResumable ? `<button onclick="resumeTask('${task.id}')">恢复</button>` : ""}
-          <button onclick="removeTask('${task.id}')">删除</button>
+          ${isPausable ? `<button class="btn-pause" onclick="pauseTask('${safeId}')" title="暂停">${pauseIcon}</button>` : ""}
+          ${isResumable ? `<button class="btn-resume" onclick="resumeTask('${safeId}')" title="恢复">${resumeIcon}</button>` : ""}
+          <button class="btn-remove" onclick="removeTask('${safeId}')" title="删除">${removeIcon}</button>
         </div>
       </div>
     </div>`;
@@ -111,26 +145,48 @@ async function refresh() {
     ];
 
     if (allTasks.length === 0) {
-      $("taskList").innerHTML = '<div class="empty">暂无任务</div>';
+      $("taskList").innerHTML = `
+        <div class="empty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5" stroke-linecap="round">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <div>暂无下载任务</div>
+          <div class="empty-hint">在下方输入 URL 或右键链接发送到 edl</div>
+        </div>`;
     } else {
       $("taskList").innerHTML = allTasks.map(renderTask).join("");
     }
   } catch (e) {
     $("statusDot").className = "status-dot offline";
-    $("taskList").innerHTML =
-      '<div class="empty">无法连接 edl RPC 服务<br>请启动 edl rpc</div>';
+    $("taskList").innerHTML = `
+      <div class="empty">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg>
+        <div>无法连接 edl RPC 服务</div>
+        <div class="empty-hint">请确认已启动 edl rpc</div>
+      </div>`;
   }
 }
 
 async function addDownload() {
-  const url = $("urlInput").value.trim();
+  const input = $("urlInput");
+  const url = input.value.trim();
   if (!url) return;
+  const btn = $("addBtn");
+  btn.disabled = true;
   try {
     await rpc("addUri", [url]);
-    $("urlInput").value = "";
+    input.value = "";
     refresh();
   } catch (e) {
     alert("添加失败: " + e.message);
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -170,6 +226,11 @@ window.removeTask = removeTask;
 $("addBtn").addEventListener("click", addDownload);
 $("urlInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") addDownload();
+});
+
+// Open settings
+$("settingsBtn").addEventListener("click", () => {
+  chrome.runtime.openOptionsPage();
 });
 
 refresh();

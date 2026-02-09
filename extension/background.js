@@ -107,7 +107,7 @@ function shouldIntercept(url, fileSize, settings) {
 chrome.downloads.onCreated.addListener(async (downloadItem) => {
   const settings = await getSettings();
   const url = downloadItem.url;
-  const fileSize = downloadItem.fileSize || downloadItem.totalBytes || 0;
+  const fileSize = downloadItem.totalBytes || 0;
 
   if (!shouldIntercept(url, fileSize, settings)) return;
 
