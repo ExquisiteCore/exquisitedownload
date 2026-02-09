@@ -14,7 +14,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Commands};
-use config::Config;
 use download_core::engine::DownloadEngine;
 
 #[tokio::main]
@@ -27,7 +26,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = Config::default();
+    let mut config = config::load_config()?;
 
     match cli.command {
         Commands::Download(args) => {
@@ -37,18 +36,17 @@ async fn main() -> Result<()> {
                 .map(config::parse_speed_limit)
                 .transpose()?;
 
-            // Parse checksum early so we fail before downloading
             let checksum = args
                 .checksum
                 .as_deref()
                 .map(util::checksum::parse_checksum)
                 .transpose()?;
 
-            let engine = if args.proxy.is_some() {
-                DownloadEngine::with_proxy(config, args.proxy.as_deref())?
-            } else {
-                DownloadEngine::new(config)?
-            };
+            // CLI args override config file
+            let proxy = args.proxy.or(config.proxy.take());
+            let on_complete = args.on_complete.or(config.on_complete.take());
+
+            let engine = DownloadEngine::with_proxy(config, proxy.as_deref())?;
 
             let task_id = engine
                 .download(
@@ -61,7 +59,7 @@ async fn main() -> Result<()> {
                 )
                 .await?;
 
-            // Checksum verification after successful download
+            // Checksum verification
             if let Some((algo, expected)) = checksum {
                 let task = engine.get_task(&task_id).await;
                 if let Some(task) = task {
@@ -71,12 +69,24 @@ async fn main() -> Result<()> {
                 }
             }
 
+            // On-complete notification
+            if let Some(ref cmd) = on_complete {
+                let task = engine.get_task(&task_id).await;
+                if let Some(task) = task {
+                    let file_str = task.file_path.display().to_string();
+                    let size = task.downloaded_bytes();
+                    config::run_on_complete(cmd, &file_str, size, &task_id);
+                }
+            }
+
             info!("Task {} completed successfully", task_id);
         }
 
         Commands::Rpc(args) => {
+            // CLI --secret overrides config file
+            let secret = args.secret.or(config.rpc_secret.take());
             let engine = Arc::new(DownloadEngine::new(config)?);
-            rpc::server::start_rpc_server(engine, &args.listen, args.secret).await?;
+            rpc::server::start_rpc_server(engine, &args.listen, secret).await?;
         }
 
         Commands::Status => {
@@ -85,7 +95,6 @@ async fn main() -> Result<()> {
             let waiting_list = rpc_call("tellWaiting", serde_json::json!({})).await?;
             let stopped_list = rpc_call("tellStopped", serde_json::json!({})).await?;
 
-            // Global stats
             println!("=== Global Stats ===");
             println!(
                 "  Active: {}  |  Waiting: {}  |  Stopped: {}  |  Speed Limit: {}",
@@ -98,7 +107,6 @@ async fn main() -> Result<()> {
                 },
             );
 
-            // Task table
             let all_tasks: Vec<&serde_json::Value> = [&active_list, &waiting_list, &stopped_list]
                 .iter()
                 .filter_map(|v| v.as_array())

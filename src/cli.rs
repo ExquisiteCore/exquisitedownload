@@ -72,6 +72,10 @@ pub struct DownloadArgs {
     /// HTTP/HTTPS/SOCKS5 proxy (e.g., http://127.0.0.1:7890, socks5://...)
     #[arg(long)]
     pub proxy: Option<String>,
+
+    /// Command to run after download completes (supports {file}, {size}, {id})
+    #[arg(long)]
+    pub on_complete: Option<String>,
 }
 
 #[derive(clap::Args)]
