@@ -46,8 +46,12 @@ async fn main() -> Result<()> {
             let proxy = args.proxy.or(config.proxy.take());
             let on_complete = args.on_complete.or(config.on_complete.take());
 
-            // Parse custom headers and cookie
-            let custom_headers = net::http::parse_headers(&args.header, args.cookie.as_deref())?;
+            // Merge headers: CLI args take priority, config as fallback
+            let mut all_headers = config.headers.clone();
+            all_headers.extend(args.header);
+            let cookie = args.cookie.or(config.cookie.take());
+
+            let custom_headers = net::http::parse_headers(&all_headers, cookie.as_deref())?;
             let headers = if custom_headers.is_empty() {
                 None
             } else {

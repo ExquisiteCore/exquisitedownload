@@ -20,6 +20,10 @@ pub struct Config {
     pub proxy: Option<String>,
     /// Command to run after download completes (supports {file}, {size}, {id})
     pub on_complete: Option<String>,
+    /// Custom HTTP headers (e.g., ["Authorization: Bearer xxx"])
+    pub headers: Vec<String>,
+    /// Cookie string
+    pub cookie: Option<String>,
 }
 
 /// TOML-friendly config structure (all fields optional, uses strings)
@@ -38,6 +42,10 @@ struct FileConfig {
     retry_count: Option<u32>,
     proxy: Option<String>,
     on_complete: Option<String>,
+    /// Custom HTTP headers
+    headers: Option<Vec<String>>,
+    /// Cookie string
+    cookie: Option<String>,
 }
 
 impl Default for Config {
@@ -58,6 +66,8 @@ impl Default for Config {
             retry_count: 3,
             proxy: None,
             on_complete: None,
+            headers: Vec::new(),
+            cookie: None,
         }
     }
 }
@@ -132,6 +142,12 @@ pub fn load_config() -> Result<Config> {
         if let Some(v) = file_cfg.on_complete {
             config.on_complete = Some(v);
         }
+        if let Some(v) = file_cfg.headers {
+            config.headers = v;
+        }
+        if let Some(v) = file_cfg.cookie {
+            config.cookie = Some(v);
+        }
 
         info!("Loaded config from {}", path.display());
     } else {
@@ -190,6 +206,12 @@ fn generate_default_config() -> String {
 # 下载完成后执行的命令
 # 支持占位符：{{file}} 文件路径, {{size}} 文件大小, {{id}} 任务ID
 # on_complete = "notify-send '下载完成' '{{file}}'"
+
+# 自定义 HTTP 请求头（数组格式）
+# headers = ["Authorization: Bearer xxx", "Referer: https://example.com"]
+
+# Cookie 字符串
+# cookie = "sid=abc; token=xyz"
 "#,
         download_dir = download_dir.replace('\\', "\\\\"),
         version = env!("CARGO_PKG_VERSION"),
