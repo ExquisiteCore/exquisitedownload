@@ -155,33 +155,39 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
         .display()
         .to_string();
 
-    // Build the rpc command args
-    // Windows uses -D flag so schtasks spawns a hidden process
+    // Build the rpc command string
+    let mut rpc_cmd = format!("{} rpc", exe);
+    // Windows uses -D flag for hidden background process
     #[cfg(target_os = "windows")]
-    let mut rpc_args = format!("\"{}\" rpc -D", exe);
-    #[cfg(not(target_os = "windows"))]
-    let mut rpc_args = format!("\"{}\" rpc", exe);
+    {
+        rpc_cmd = format!("{} rpc -D", exe);
+    }
     if args.listen != "127.0.0.1:6800" {
-        rpc_args.push_str(&format!(" --listen {}", args.listen));
+        rpc_cmd.push_str(&format!(" --listen {}", args.listen));
     }
     if let Some(ref secret) = args.secret {
-        rpc_args.push_str(&format!(" --secret {}", secret));
+        rpc_cmd.push_str(&format!(" --secret {}", secret));
     }
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("schtasks")
+        // Use Registry Run key — no admin required, no quoting issues
+        let status = Command::new("reg")
             .args([
-                "/create", "/tn", "edl-rpc", "/tr", &rpc_args, "/sc", "onlogon", "/rl", "highest",
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v", "edl-rpc",
+                "/t", "REG_SZ",
+                "/d", &rpc_cmd,
                 "/f",
             ])
             .status()
-            .context("Failed to create scheduled task")?;
+            .context("Failed to write registry")?;
         if status.success() {
-            println!("已注册开机自启 (Windows 计划任务: edl-rpc)");
-            println!("命令: {}", rpc_args);
+            println!("已注册开机自启 (注册表: HKCU\\...\\Run\\edl-rpc)");
+            println!("命令: {}", rpc_cmd);
         } else {
-            bail!("注册计划任务失败，请尝试以管理员身份运行");
+            bail!("写入注册表失败");
         }
     }
 
@@ -203,7 +209,7 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
              \n\
              [Install]\n\
              WantedBy=default.target\n",
-            rpc_args
+            rpc_cmd
         );
 
         let service_path = service_dir.join("edl.service");
@@ -295,14 +301,19 @@ pub fn install_service(args: &RpcArgs) -> Result<()> {
 pub fn uninstall_service() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("schtasks")
-            .args(["/delete", "/tn", "edl-rpc", "/f"])
+        let status = Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v", "edl-rpc",
+                "/f",
+            ])
             .status()
-            .context("Failed to delete scheduled task")?;
+            .context("Failed to delete registry key")?;
         if status.success() {
-            println!("已取消开机自启 (已删除计划任务: edl-rpc)");
+            println!("已取消开机自启 (已删除注册表: edl-rpc)");
         } else {
-            bail!("删除计划任务失败，可能不存在或需要管理员权限");
+            bail!("删除注册表项失败，可能不存在");
         }
     }
 
