@@ -58,18 +58,24 @@ async function rpc(method, params = []) {
   });
 }
 
-function renderTask(task) {
-  const filename = escapeHtml(getFilename(task.file_path));
+// SVG icons for action buttons
+const ICON_PAUSE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
+const ICON_RESUME = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>`;
+const ICON_REMOVE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+
+// Compute display values from a task object
+function taskProgress(task) {
   const totalSize = task.total_size || 0;
   const downloaded = (task.segments || []).reduce(
     (sum, s) => sum + (s.downloaded || 0),
     0
   );
-
   const status = task.status || "Pending";
   const isCompleted = status === "Completed";
+  const isPausable = status === "Downloading";
+  const isResumable = status === "Paused" || status === "Error";
+  const speed = task.speed || 0;
 
-  // Force 100% for completed tasks
   const progress = isCompleted
     ? 100
     : totalSize > 0
@@ -85,44 +91,97 @@ function renderTask(task) {
     : totalSize > 0
       ? formatBytes(downloaded) + " / " + formatBytes(totalSize)
       : formatBytes(downloaded);
-
-  const isPausable = status === "Downloading";
-  const isResumable = status === "Paused" || status === "Error";
-
-  // Speed display for active downloads
-  const speed = task.speed || 0;
   const speedText = isPausable && speed > 0 ? formatSpeed(speed) : "";
 
-  // Safe task ID for onclick
-  const safeId = escapeHtml(String(task.id));
+  return { status, progress, progressText, sizeText, speedText, isPausable, isResumable };
+}
 
-  // SVG icons for buttons
-  const pauseIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
-  const resumeIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>`;
-  const removeIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+function buildActionButtons(isPausable, isResumable) {
+  let html = "";
+  if (isPausable) html += `<button class="btn-pause" title="暂停">${ICON_PAUSE}</button>`;
+  if (isResumable) html += `<button class="btn-resume" title="恢复">${ICON_RESUME}</button>`;
+  html += `<button class="btn-remove" title="删除">${ICON_REMOVE}</button>`;
+  return html;
+}
+
+function renderTask(task) {
+  const filename = escapeHtml(getFilename(task.file_path));
+  const safeId = escapeHtml(String(task.id));
+  const p = taskProgress(task);
 
   return `
-    <div class="task-item" data-id="${safeId}">
+    <div class="task-item" data-id="${safeId}" data-status="${p.status}">
       <div class="task-top">
         <span class="task-name" title="${filename}">${filename}</span>
-        <span class="task-status ${statusClass(status)}">${statusLabel(status)}</span>
+        <span class="task-status ${statusClass(p.status)}">${statusLabel(p.status)}</span>
       </div>
       <div class="task-mid">
         <div class="progress-bar">
-          <div class="progress-fill ${statusClass(status)}" style="width:${progress}%"></div>
+          <div class="progress-fill ${statusClass(p.status)}" style="width:${p.progress}%"></div>
         </div>
-        <span class="progress-text">${progressText}</span>
+        <span class="progress-text">${p.progressText}</span>
       </div>
       <div class="task-bottom">
-        <span class="task-size">${sizeText}${speedText ? `<span class="task-speed">${speedText}</span>` : ""}</span>
+        <span class="task-size">${p.sizeText}${p.speedText ? `<span class="task-speed">${p.speedText}</span>` : ""}</span>
         <div class="task-actions">
-          ${isPausable ? `<button class="btn-pause" onclick="pauseTask('${safeId}')" title="暂停">${pauseIcon}</button>` : ""}
-          ${isResumable ? `<button class="btn-resume" onclick="resumeTask('${safeId}')" title="恢复">${resumeIcon}</button>` : ""}
-          <button class="btn-remove" onclick="removeTask('${safeId}')" title="删除">${removeIcon}</button>
+          ${buildActionButtons(p.isPausable, p.isResumable)}
         </div>
       </div>
     </div>`;
 }
+
+// Update an existing task DOM element in place (preserves element so CSS transition works)
+function updateTaskElement(el, task) {
+  const p = taskProgress(task);
+  const prevStatus = el.dataset.status;
+
+  // Progress bar width — CSS transition animates this smoothly
+  const fill = el.querySelector(".progress-fill");
+  fill.style.width = p.progress + "%";
+
+  // Progress text
+  el.querySelector(".progress-text").textContent = p.progressText;
+
+  // Size + speed
+  const sizeEl = el.querySelector(".task-size");
+  sizeEl.innerHTML = p.sizeText + (p.speedText ? `<span class="task-speed">${p.speedText}</span>` : "");
+
+  // Only rebuild status badge and action buttons when status actually changes
+  if (prevStatus !== p.status) {
+    el.dataset.status = p.status;
+
+    fill.className = "progress-fill " + statusClass(p.status);
+
+    const statusEl = el.querySelector(".task-status");
+    statusEl.textContent = statusLabel(p.status);
+    statusEl.className = "task-status " + statusClass(p.status);
+
+    el.querySelector(".task-actions").innerHTML =
+      buildActionButtons(p.isPausable, p.isResumable);
+  }
+}
+
+const EMPTY_TASKS_HTML = `
+  <div class="empty">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5" stroke-linecap="round">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    <div>暂无下载任务</div>
+    <div class="empty-hint">在下方输入 URL 或右键链接发送到 edl</div>
+  </div>`;
+
+const OFFLINE_HTML = `
+  <div class="empty">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="15" y1="9" x2="9" y2="15"/>
+      <line x1="9" y1="9" x2="15" y2="15"/>
+    </svg>
+    <div>无法连接 edl RPC 服务</div>
+    <div class="empty-hint">请确认已启动 edl rpc</div>
+  </div>`;
 
 async function refresh() {
   try {
@@ -144,32 +203,47 @@ async function refresh() {
       ...(stopped || []),
     ];
 
+    const taskList = $("taskList");
+
     if (allTasks.length === 0) {
-      $("taskList").innerHTML = `
-        <div class="empty">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5" stroke-linecap="round">
-            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          <div>暂无下载任务</div>
-          <div class="empty-hint">在下方输入 URL 或右键链接发送到 edl</div>
-        </div>`;
-    } else {
-      $("taskList").innerHTML = allTasks.map(renderTask).join("");
+      taskList.innerHTML = EMPTY_TASKS_HTML;
+      return;
     }
+
+    // Remove empty placeholder if present
+    const emptyEl = taskList.querySelector(".empty");
+    if (emptyEl) emptyEl.remove();
+
+    // Track current task IDs for cleanup
+    const currentIds = new Set(allTasks.map((t) => String(t.id)));
+
+    // Remove elements for tasks that no longer exist
+    taskList.querySelectorAll(".task-item").forEach((el) => {
+      if (!currentIds.has(el.dataset.id)) el.remove();
+    });
+
+    // Update existing or create new task elements
+    allTasks.forEach((task) => {
+      const id = String(task.id);
+      const el = taskList.querySelector(`.task-item[data-id="${CSS.escape(id)}"]`);
+      if (el) {
+        updateTaskElement(el, task);
+      } else {
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = renderTask(task);
+        taskList.appendChild(wrapper.firstElementChild);
+      }
+    });
+
+    // Reorder to match server order (active -> waiting -> stopped)
+    allTasks.forEach((task) => {
+      const id = CSS.escape(String(task.id));
+      const el = taskList.querySelector(`.task-item[data-id="${id}"]`);
+      if (el) taskList.appendChild(el);
+    });
   } catch (e) {
     $("statusDot").className = "status-dot offline";
-    $("taskList").innerHTML = `
-      <div class="empty">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="15" y1="9" x2="9" y2="15"/>
-          <line x1="9" y1="9" x2="15" y2="15"/>
-        </svg>
-        <div>无法连接 edl RPC 服务</div>
-        <div class="empty-hint">请确认已启动 edl rpc</div>
-      </div>`;
+    $("taskList").innerHTML = OFFLINE_HTML;
   }
 }
 
@@ -217,10 +291,20 @@ async function removeTask(id) {
   }
 }
 
-// Make functions available to inline onclick
-window.pauseTask = pauseTask;
-window.resumeTask = resumeTask;
-window.removeTask = removeTask;
+// Event delegation for task action buttons (avoids inline onclick blocked by CSP)
+$("taskList").addEventListener("click", (e) => {
+  const taskItem = e.target.closest(".task-item");
+  if (!taskItem) return;
+  const id = taskItem.dataset.id;
+
+  if (e.target.closest(".btn-pause")) {
+    pauseTask(id);
+  } else if (e.target.closest(".btn-resume")) {
+    resumeTask(id);
+  } else if (e.target.closest(".btn-remove")) {
+    removeTask(id);
+  }
+});
 
 // Init
 $("addBtn").addEventListener("click", addDownload);
@@ -234,4 +318,4 @@ $("settingsBtn").addEventListener("click", () => {
 });
 
 refresh();
-setInterval(refresh, 2000);
+setInterval(refresh, 1500);
