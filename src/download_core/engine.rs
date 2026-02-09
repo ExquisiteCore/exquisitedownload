@@ -15,7 +15,7 @@ use crate::storage::state;
 use crate::util::{progress, speed};
 
 use super::merge::merge_segments;
-use super::segment::{create_segments, create_single_segment, SegmentStatus};
+use super::segment::{create_segments, create_single_segment};
 use super::task::{DownloadTask, TaskStatus};
 use super::worker::{self, ProgressCallback};
 
