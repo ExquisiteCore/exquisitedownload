@@ -1,0 +1,171 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --verbose
+
+  build:
+    name: Build ${{ matrix.target.name }}
+    needs: test
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: edl
+            asset_name: edl-linux-amd64
+          - name: Linux ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            bin: edl
+            asset_name: edl-linux-arm64
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: edl.exe
+            asset_name: edl-windows-amd64.exe
+          - name: macOS x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bin: edl
+            asset_name: edl-macos-amd64
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bin: edl
+            asset_name: edl-macos-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.target }}
+
+      - name: Install cross compile tools (Linux ARM64)
+        if: matrix.target.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target.target }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target.target }}
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Prepare archive
+        shell: bash
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target.target }}/release/${{ matrix.target.bin }} release/${{ matrix.target.asset_name }}
+          cp config.toml release/config.toml
+          cp README.md release/README.md
+
+      - name: Create tar.gz (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd release
+          tar czf ${{ matrix.target.asset_name }}.tar.gz ${{ matrix.target.asset_name }} config.toml README.md
+
+      - name: Create zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd release
+          Compress-Archive -Path "${{ matrix.target.asset_name }}", "config.toml", "README.md" -DestinationPath "${{ matrix.target.asset_name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.asset_name }}
+          path: |
+            release/${{ matrix.target.asset_name }}.tar.gz
+            release/${{ matrix.target.asset_name }}.zip
+          if-no-files-found: warn
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Generate changelog
+        id: changelog
+        shell: bash
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "## What's Changed" > changelog.md
+          echo "" >> changelog.md
+          echo "### Downloads" >> changelog.md
+          echo "" >> changelog.md
+          echo "| Platform | File |" >> changelog.md
+          echo "|----------|------|" >> changelog.md
+          echo "| Linux x86_64 | \`edl-linux-amd64.tar.gz\` |" >> changelog.md
+          echo "| Linux ARM64 | \`edl-linux-arm64.tar.gz\` |" >> changelog.md
+          echo "| Windows x86_64 | \`edl-windows-amd64.exe.zip\` |" >> changelog.md
+          echo "| macOS x86_64 | \`edl-macos-amd64.tar.gz\` |" >> changelog.md
+          echo "| macOS ARM64 | \`edl-macos-arm64.tar.gz\` |" >> changelog.md
+          echo "" >> changelog.md
+          echo "### Usage" >> changelog.md
+          echo "" >> changelog.md
+          echo '```bash' >> changelog.md
+          echo "# Download a file" >> changelog.md
+          echo "edl download https://example.com/file.zip" >> changelog.md
+          echo "" >> changelog.md
+          echo "# Start RPC server" >> changelog.md
+          echo "edl rpc" >> changelog.md
+          echo '```' >> changelog.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.changelog.outputs.tag }}
+          body_path: changelog.md
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
