@@ -1,6 +1,28 @@
 [package]
-name = "ExquisiteDownload"
+name = "exquisite-download"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "edl"
+path = "src/main.rs"
+
 [dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "json"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = "0.8"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-util = "0.7"
+anyhow = "1"
+thiserror = "2"
+futures = "0.3"
+directories = "6"
+url = "2"
+urlencoding = "2"
