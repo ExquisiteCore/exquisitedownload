@@ -131,12 +131,24 @@ impl DownloadEngine {
         let download_dir = dir.unwrap_or_else(|| self.config.download_dir.clone());
         tokio::fs::create_dir_all(&download_dir).await?;
 
+        // Build per-task extra headers for metadata requests
+        let extra_hdr_map =
+            if !extra_headers.is_empty() || extra_cookie.is_some() {
+                Some(
+                    http::parse_headers(&extra_headers, extra_cookie.as_deref())
+                        .unwrap_or_default(),
+                )
+            } else {
+                None
+            };
+
         // Check for resumable state
         let existing = state::find_state_by_url(&url, &download_dir).await?;
 
         if let Some(mut prev) = existing {
             // ETag validation: re-fetch metadata and compare
-            let metadata = http::fetch_metadata(&self.client, &url).await?;
+            let metadata =
+                http::fetch_metadata(&self.client, &url, extra_hdr_map.as_ref()).await?;
             let etag_mismatch = matches!(
                 (&prev.etag, &metadata.etag),
                 (Some(old), Some(new)) if old != new
@@ -178,7 +190,8 @@ impl DownloadEngine {
 
         // New download
         info!("Fetching file info from {}", url);
-        let metadata = http::fetch_metadata(&self.client, &url).await?;
+        let metadata =
+            http::fetch_metadata(&self.client, &url, extra_hdr_map.as_ref()).await?;
 
         // Use the final URL after redirects for Range requests
         let effective_url = metadata.final_url.clone().unwrap_or(url);

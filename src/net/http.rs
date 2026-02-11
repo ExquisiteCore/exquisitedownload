@@ -61,9 +61,21 @@ pub fn build_client(
 /// Fetch file metadata. Tries HEAD first; if the server rejects HEAD
 /// (404, 405, etc.), falls back to GET with `Range: bytes=0-0` so we
 /// can still obtain headers without downloading the whole file.
-pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> {
+pub async fn fetch_metadata(
+    client: &Client,
+    url: &str,
+    extra_headers: Option<&HeaderMap>,
+) -> Result<FileMetadata> {
+    // Build HEAD request with optional extra headers (cookies, etc.)
+    let mut head_req = client.head(url);
+    if let Some(hdrs) = extra_headers {
+        for (k, v) in hdrs {
+            head_req = head_req.header(k, v);
+        }
+    }
+
     // Try HEAD first
-    let head_ok = match client.head(url).send().await {
+    let head_ok = match head_req.send().await {
         Ok(r) if r.status().is_success() => Some(r),
         Ok(r) => {
             tracing::debug!("HEAD returned {}, falling back to GET", r.status());
@@ -79,9 +91,15 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
         (r, false)
     } else {
         // Fallback: GET with Range to minimise data transfer
-        let r = client
+        let mut get_req = client
             .get(url)
-            .header(reqwest::header::RANGE, "bytes=0-0")
+            .header(reqwest::header::RANGE, "bytes=0-0");
+        if let Some(hdrs) = extra_headers {
+            for (k, v) in hdrs {
+                get_req = get_req.header(k, v);
+            }
+        }
+        let r = get_req
             .send()
             .await
             .context("GET fallback request failed")?;
