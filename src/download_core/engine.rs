@@ -262,10 +262,7 @@ impl DownloadEngine {
 
     /// Spawn a download task in background (non-blocking).
     /// Used by RPC `addUri`.
-    pub async fn download_background(
-        self: &Arc<Self>,
-        opts: DownloadOptions,
-    ) -> Result<String> {
+    pub async fn download_background(self: &Arc<Self>, opts: DownloadOptions) -> Result<String> {
         let task = self.prepare_download(opts).await?;
         let task_id = task.id.clone();
 

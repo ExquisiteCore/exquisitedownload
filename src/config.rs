@@ -362,7 +362,11 @@ mod tests {
     fn test_run_hook_substitution() {
         // Verify run_hook's placeholder logic by replicating it
         let template = "notify {id} {url} {error}";
-        let vars = [("id", "task1"), ("url", "http://x.com"), ("error", "timeout")];
+        let vars = [
+            ("id", "task1"),
+            ("url", "http://x.com"),
+            ("error", "timeout"),
+        ];
         let mut cmd = template.to_string();
         for (key, val) in &vars {
             cmd = cmd.replace(&format!("{{{}}}", key), val);
