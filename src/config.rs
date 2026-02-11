@@ -21,6 +21,12 @@ pub struct Config {
     pub proxy: Option<String>,
     /// Command to run after download completes (supports {file}, {size}, {id})
     pub on_complete: Option<String>,
+    /// Command to run when download starts (supports {file}, {id}, {url})
+    pub on_start: Option<String>,
+    /// Command to run when download is paused (supports {file}, {id})
+    pub on_pause: Option<String>,
+    /// Command to run when download fails (supports {file}, {id}, {error})
+    pub on_error: Option<String>,
     /// Custom HTTP headers (e.g., ["Authorization: Bearer xxx"])
     pub headers: Vec<String>,
     /// Cookie string
@@ -44,6 +50,9 @@ struct FileConfig {
     max_redirects: Option<u32>,
     proxy: Option<String>,
     on_complete: Option<String>,
+    on_start: Option<String>,
+    on_pause: Option<String>,
+    on_error: Option<String>,
     /// Custom HTTP headers
     headers: Option<Vec<String>>,
     /// Cookie string
@@ -69,6 +78,9 @@ impl Default for Config {
             max_redirects: 10,
             proxy: None,
             on_complete: None,
+            on_start: None,
+            on_pause: None,
+            on_error: None,
             headers: Vec::new(),
             cookie: None,
         }
@@ -148,6 +160,15 @@ pub fn load_config() -> Result<Config> {
         if let Some(v) = file_cfg.on_complete {
             config.on_complete = Some(v);
         }
+        if let Some(v) = file_cfg.on_start {
+            config.on_start = Some(v);
+        }
+        if let Some(v) = file_cfg.on_pause {
+            config.on_pause = Some(v);
+        }
+        if let Some(v) = file_cfg.on_error {
+            config.on_error = Some(v);
+        }
         if let Some(v) = file_cfg.headers {
             config.headers = v;
         }
@@ -216,6 +237,15 @@ fn generate_default_config() -> String {
 # 支持占位符：{{file}} 文件路径, {{size}} 文件大小, {{id}} 任务ID
 # on_complete = "notify-send '下载完成' '{{file}}'"
 
+# 下载开始时执行的命令（支持 {{file}}, {{id}}, {{url}}）
+# on_start = "echo '开始下载: {{file}}'"
+
+# 下载暂停时执行的命令（支持 {{file}}, {{id}}）
+# on_pause = "echo '已暂停: {{file}}'"
+
+# 下载出错时执行的命令（支持 {{file}}, {{id}}, {{error}}）
+# on_error = "echo '下载失败: {{file}} — {{error}}'"
+
 # 自定义 HTTP 请求头（数组格式）
 # headers = ["Authorization: Bearer xxx", "Referer: https://example.com"]
 
@@ -248,14 +278,15 @@ pub fn parse_speed_limit(s: &str) -> Result<u64> {
     Ok(num * multiplier)
 }
 
-/// Execute on-complete command with placeholder substitution
-pub fn run_on_complete(cmd_template: &str, file_path: &str, size: u64, task_id: &str) {
-    let cmd = cmd_template
-        .replace("{file}", file_path)
-        .replace("{size}", &size.to_string())
-        .replace("{id}", task_id);
+/// Execute a hook command with placeholder substitution.
+/// `vars` is a list of (placeholder, value) pairs, e.g., [("file", "/path"), ("id", "abc")].
+pub fn run_hook(cmd_template: &str, vars: &[(&str, &str)]) {
+    let mut cmd = cmd_template.to_string();
+    for (key, val) in vars {
+        cmd = cmd.replace(&format!("{{{}}}", key), val);
+    }
 
-    info!("Running on-complete: {}", cmd);
+    info!("Running hook: {}", cmd);
 
     #[cfg(target_os = "windows")]
     let result = std::process::Command::new("cmd").args(["/C", &cmd]).spawn();
@@ -265,8 +296,20 @@ pub fn run_on_complete(cmd_template: &str, file_path: &str, size: u64, task_id: 
 
     match result {
         Ok(_) => {}
-        Err(e) => tracing::warn!("on-complete command failed: {}", e),
+        Err(e) => tracing::warn!("hook command failed: {}", e),
     }
+}
+
+/// Execute on-complete command with placeholder substitution
+pub fn run_on_complete(cmd_template: &str, file_path: &str, size: u64, task_id: &str) {
+    run_hook(
+        cmd_template,
+        &[
+            ("file", file_path),
+            ("size", &size.to_string()),
+            ("id", task_id),
+        ],
+    );
 }
 
 #[cfg(test)]

@@ -28,6 +28,12 @@ pub struct DownloadTask {
     pub max_connections: u8,
     pub download_dir: PathBuf,
     pub error_message: Option<String>,
+    /// Per-task extra HTTP headers (e.g., ["Referer: https://..."])
+    #[serde(default)]
+    pub extra_headers: Vec<String>,
+    /// Per-task cookie string (e.g., "sid=abc; token=xyz")
+    #[serde(default)]
+    pub extra_cookie: Option<String>,
 }
 
 impl DownloadTask {
@@ -50,6 +56,8 @@ impl DownloadTask {
             max_connections,
             download_dir,
             error_message: None,
+            extra_headers: Vec::new(),
+            extra_cookie: None,
         }
     }
 

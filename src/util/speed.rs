@@ -29,26 +29,30 @@ impl SpeedLimiter {
     }
 
     /// Consume `bytes` from the bucket. Returns delay to wait if over limit.
+    /// Uses a 100ms window for smoother throughput compared to 1-second bursts.
     pub fn consume(&self, bytes: u64) -> Option<Duration> {
+        const WINDOW_MS: u64 = 100;
+
         let limit = self.limit.load(Ordering::Relaxed);
         if limit == 0 {
             return None;
         }
 
-        let mut window_start = self.window_start.lock().unwrap();
-        let elapsed = window_start.elapsed();
-
-        // Reset window every second
-        if elapsed >= Duration::from_secs(1) {
-            *window_start = Instant::now();
-            self.consumed.store(0, Ordering::Relaxed);
+        // Lock only to check/reset window, then release immediately
+        {
+            let mut window_start = self.window_start.lock().unwrap();
+            if window_start.elapsed() >= Duration::from_millis(WINDOW_MS) {
+                *window_start = Instant::now();
+                self.consumed.store(0, Ordering::Relaxed);
+            }
         }
 
+        let window_budget = limit * WINDOW_MS / 1000;
         let prev = self.consumed.fetch_add(bytes, Ordering::Relaxed);
         let total = prev + bytes;
 
-        if total > limit {
-            let overshoot = total - limit;
+        if total > window_budget {
+            let overshoot = total - window_budget;
             let delay_ms = (overshoot as f64 / limit as f64 * 1000.0) as u64;
             Some(Duration::from_millis(delay_ms.max(1)))
         } else {
@@ -116,15 +120,16 @@ mod tests {
     #[test]
     fn test_speed_limiter_under_limit() {
         let limiter = SpeedLimiter::new(10000);
-        assert!(limiter.consume(5000).is_none());
+        // 100ms window budget = 10000 * 100 / 1000 = 1000
+        assert!(limiter.consume(500).is_none());
     }
 
     #[test]
     fn test_speed_limiter_over_limit() {
-        let limiter = SpeedLimiter::new(1000);
-        // First consume is under limit
+        let limiter = SpeedLimiter::new(10000);
+        // 100ms window budget = 1000
         assert!(limiter.consume(500).is_none());
-        // Second consume puts us over
+        // Second consume puts us over the 1000 budget
         let delay = limiter.consume(600);
         assert!(delay.is_some());
     }

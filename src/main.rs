@@ -125,6 +125,7 @@ async fn main() -> Result<()> {
             let secret = args.secret.or(config.rpc_secret.take());
             let engine = Arc::new(DownloadEngine::new(config)?);
             engine.load_persisted_tasks().await?;
+            engine.spawn_hook_runner();
             let result = rpc::server::start_rpc_server(engine, &args.listen, secret).await;
 
             daemon::remove_pid();

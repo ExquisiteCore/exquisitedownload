@@ -25,6 +25,7 @@ pub async fn download_segment(
     speed_limiter: Option<&Arc<SpeedLimiter>>,
     on_progress: &ProgressCallback,
     retry_count: u32,
+    extra_headers: Option<&reqwest::header::HeaderMap>,
 ) -> Result<()> {
     let mut last_err = None;
     for attempt in 0..=retry_count {
@@ -46,6 +47,7 @@ pub async fn download_segment(
             cancel_flag,
             speed_limiter,
             on_progress,
+            extra_headers,
         )
         .await
         {
@@ -71,6 +73,7 @@ async fn download_segment_once(
     cancel_flag: &AtomicBool,
     speed_limiter: Option<&Arc<SpeedLimiter>>,
     on_progress: &ProgressCallback,
+    extra_headers: Option<&reqwest::header::HeaderMap>,
 ) -> Result<()> {
     let temp_path = download_dir.join(segment.temp_filename(task_id));
 
@@ -100,6 +103,13 @@ async fn download_segment_once(
     let end_byte = segment.end - 1;
 
     let mut request = client.get(url);
+
+    // Apply per-task extra headers (cookies, referer, etc.)
+    if let Some(headers) = extra_headers {
+        for (key, val) in headers {
+            request = request.header(key, val);
+        }
+    }
 
     if segment.start > 0 || segment.end < u64::MAX {
         request = request.header(

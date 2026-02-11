@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use indicatif::MultiProgress;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, broadcast};
 use tracing::{error, info, warn};
 
 use crate::config::Config;
@@ -20,6 +20,34 @@ use super::segment::{create_segments, create_single_segment};
 use super::task::{DownloadTask, TaskStatus};
 use super::worker::{self, ProgressCallback};
 
+/// Lifecycle events emitted by the download engine.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type")]
+pub enum EngineEvent {
+    TaskStarted {
+        task_id: String,
+        url: String,
+        file_path: String,
+    },
+    TaskProgress {
+        task_id: String,
+        downloaded: u64,
+        total: Option<u64>,
+    },
+    TaskPaused {
+        task_id: String,
+    },
+    TaskCompleted {
+        task_id: String,
+        file_path: String,
+        size: u64,
+    },
+    TaskError {
+        task_id: String,
+        message: String,
+    },
+}
+
 /// The download engine manages all download tasks
 pub struct DownloadEngine {
     config: Config,
@@ -30,6 +58,8 @@ pub struct DownloadEngine {
     multi_progress: MultiProgress,
     /// Semaphore limiting concurrent downloads
     concurrency_sem: Arc<Semaphore>,
+    /// Broadcast channel for engine lifecycle events
+    event_tx: broadcast::Sender<EngineEvent>,
 }
 
 impl DownloadEngine {
@@ -43,6 +73,7 @@ impl DownloadEngine {
         )?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
         let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
+        let (event_tx, _) = broadcast::channel(256);
 
         Ok(Self {
             config,
@@ -52,6 +83,7 @@ impl DownloadEngine {
             speed_limiter,
             multi_progress: MultiProgress::new(),
             concurrency_sem,
+            event_tx,
         })
     }
 
@@ -70,6 +102,7 @@ impl DownloadEngine {
         )?;
         let speed_limiter = Arc::new(SpeedLimiter::new(config.max_speed.unwrap_or(0)));
         let concurrency_sem = Arc::new(Semaphore::new(config.max_concurrent_tasks));
+        let (event_tx, _) = broadcast::channel(256);
 
         Ok(Self {
             config,
@@ -79,6 +112,7 @@ impl DownloadEngine {
             speed_limiter,
             multi_progress: MultiProgress::new(),
             concurrency_sem,
+            event_tx,
         })
     }
 
@@ -91,6 +125,8 @@ impl DownloadEngine {
         dir: Option<PathBuf>,
         split: u8,
         max_connections: u8,
+        extra_headers: Vec<String>,
+        extra_cookie: Option<String>,
     ) -> Result<DownloadTask> {
         let download_dir = dir.unwrap_or_else(|| self.config.download_dir.clone());
         tokio::fs::create_dir_all(&download_dir).await?;
@@ -169,6 +205,8 @@ impl DownloadEngine {
         task.total_size = metadata.content_length;
         task.supports_range = metadata.supports_range;
         task.etag = metadata.etag;
+        task.extra_headers = extra_headers;
+        task.extra_cookie = extra_cookie;
 
         if let Some(total_size) = metadata.content_length {
             if metadata.supports_range && split > 1 {
@@ -200,7 +238,7 @@ impl DownloadEngine {
         speed_limit_override: Option<u64>,
     ) -> Result<String> {
         let task = self
-            .prepare_download(url, output, dir, split, max_connections)
+            .prepare_download(url, output, dir, split, max_connections, Vec::new(), None)
             .await?;
         let task_id = task.id.clone();
 
@@ -221,9 +259,11 @@ impl DownloadEngine {
         dir: Option<PathBuf>,
         split: u8,
         max_connections: u8,
+        extra_headers: Vec<String>,
+        extra_cookie: Option<String>,
     ) -> Result<String> {
         let task = self
-            .prepare_download(url, output, dir, split, max_connections)
+            .prepare_download(url, output, dir, split, max_connections, extra_headers, extra_cookie)
             .await?;
         let task_id = task.id.clone();
 
@@ -271,6 +311,18 @@ impl DownloadEngine {
             return Ok(());
         }
 
+        // Emit TaskStarted event
+        let file_path_str = task
+            .file_path
+            .to_str()
+            .unwrap_or_default()
+            .to_string();
+        let _ = self.event_tx.send(EngineEvent::TaskStarted {
+            task_id: task_id.clone(),
+            url: task.url.clone(),
+            file_path: file_path_str.clone(),
+        });
+
         // Run the download
         let result = self.run_download(task, &download_dir, cancel_flag).await;
 
@@ -280,10 +332,21 @@ impl DownloadEngine {
         match &result {
             Ok(()) => {
                 state::remove_state(&task_id, &download_dir).await?;
-                let mut tasks = self.tasks.write().await;
-                if let Some(t) = tasks.get_mut(&task_id) {
-                    t.status = TaskStatus::Completed;
-                }
+                let size = {
+                    let mut tasks = self.tasks.write().await;
+                    if let Some(t) = tasks.get_mut(&task_id) {
+                        t.status = TaskStatus::Completed;
+                    }
+                    tasks
+                        .get(&task_id)
+                        .map(|t| t.downloaded_bytes())
+                        .unwrap_or(0)
+                };
+                let _ = self.event_tx.send(EngineEvent::TaskCompleted {
+                    task_id: task_id.clone(),
+                    file_path: file_path_str,
+                    size,
+                });
             }
             Err(e) => {
                 error!("Download failed: {}", e);
@@ -293,6 +356,10 @@ impl DownloadEngine {
                     t.error_message = Some(e.to_string());
                     let _ = state::save_state(t, &download_dir).await;
                 }
+                let _ = self.event_tx.send(EngineEvent::TaskError {
+                    task_id: task_id.clone(),
+                    message: e.to_string(),
+                });
             }
         }
 
@@ -315,6 +382,16 @@ impl DownloadEngine {
             .and_then(|n| n.to_str())
             .unwrap_or("download")
             .to_string();
+
+        // Build per-task extra headers (from extension cookies, referer, etc.)
+        let extra_header_map = if !task.extra_headers.is_empty() || task.extra_cookie.is_some() {
+            Some(Arc::new(
+                http::parse_headers(&task.extra_headers, task.extra_cookie.as_deref())
+                    .unwrap_or_default(),
+            ))
+        } else {
+            None
+        };
 
         // Progress bar
         let pb = if total_size > 0 {
@@ -347,6 +424,7 @@ impl DownloadEngine {
         // Launch segment workers
         let mut handles = Vec::new();
         let segments_len = task.segments.len();
+        let worker_sem = Arc::new(Semaphore::new(task.max_connections as usize));
 
         for i in 0..segments_len {
             if task.segments[i].is_complete() {
@@ -361,8 +439,12 @@ impl DownloadEngine {
             let limiter = self.speed_limiter.clone();
             let progress_cb = on_progress.clone();
             let mut segment = task.segments[i].clone();
+            let sem = worker_sem.clone();
+            let hdrs = extra_header_map.clone();
 
             let handle = tokio::spawn(async move {
+                // Wait for a connection slot
+                let _permit = sem.acquire().await.unwrap();
                 let result = worker::download_segment(
                     &client,
                     &url,
@@ -373,6 +455,7 @@ impl DownloadEngine {
                     Some(&limiter),
                     &progress_cb,
                     retry_count,
+                    hdrs.as_deref(),
                 )
                 .await;
                 (i, segment, result)
@@ -387,6 +470,7 @@ impl DownloadEngine {
         let save_counters = seg_counters.clone();
         let save_cancel = cancel_flag.clone();
         let save_tasks = self.tasks.clone();
+        let event_tx = self.event_tx.clone();
         let save_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
             loop {
@@ -398,10 +482,16 @@ impl DownloadEngine {
                 for (seg, counter) in snapshot.segments.iter_mut().zip(save_counters.iter()) {
                     seg.downloaded = counter.load(Ordering::Relaxed);
                 }
+                let dl_bytes = snapshot.downloaded_bytes();
                 if let Some(t) = save_tasks.write().await.get_mut(&snapshot.id) {
                     t.segments = snapshot.segments.clone();
                 }
                 let _ = state::save_state(&snapshot, &save_dir).await;
+                let _ = event_tx.send(EngineEvent::TaskProgress {
+                    task_id: snapshot.id.clone(),
+                    downloaded: dl_bytes,
+                    total: snapshot.total_size,
+                });
             }
         });
 
@@ -480,6 +570,9 @@ impl DownloadEngine {
             task.status = TaskStatus::Paused;
             let _ = state::save_state(task, &task.download_dir.clone()).await;
         }
+        let _ = self.event_tx.send(EngineEvent::TaskPaused {
+            task_id: task_id.to_string(),
+        });
         Ok(())
     }
 
@@ -502,7 +595,9 @@ impl DownloadEngine {
         let dir = task.download_dir.clone();
         let split = task.segments.len() as u8;
         let max_conn = task.max_connections;
-        self.download_background(url, None, Some(dir), split, max_conn)
+        let headers = task.extra_headers.clone();
+        let cookie = task.extra_cookie.clone();
+        self.download_background(url, None, Some(dir), split, max_conn, headers, cookie)
             .await?;
         Ok(())
     }
@@ -566,6 +661,82 @@ impl DownloadEngine {
 
     pub fn default_connections(&self) -> u8 {
         self.config.max_connections_per_task
+    }
+
+    /// Subscribe to engine lifecycle events (for WebSocket, hooks, etc.)
+    pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Get a reference to the engine config
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Spawn a background task that listens for events and runs config hooks
+    pub fn spawn_hook_runner(&self) {
+        use crate::config::run_hook;
+
+        let mut rx = self.event_tx.subscribe();
+        let config = self.config.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let event = match rx.recv().await {
+                    Ok(e) => e,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::debug!("hook runner skipped {} events", n);
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+
+                match event {
+                    EngineEvent::TaskStarted {
+                        task_id,
+                        url,
+                        file_path,
+                    } => {
+                        if let Some(ref tpl) = config.on_start {
+                            run_hook(
+                                tpl,
+                                &[("file", &file_path), ("id", &task_id), ("url", &url)],
+                            );
+                        }
+                    }
+                    EngineEvent::TaskCompleted {
+                        task_id,
+                        file_path,
+                        size,
+                    } => {
+                        if let Some(ref tpl) = config.on_complete {
+                            run_hook(
+                                tpl,
+                                &[
+                                    ("file", &file_path),
+                                    ("size", &size.to_string()),
+                                    ("id", &task_id),
+                                ],
+                            );
+                        }
+                    }
+                    EngineEvent::TaskPaused { task_id } => {
+                        if let Some(ref tpl) = config.on_pause {
+                            run_hook(tpl, &[("id", &task_id)]);
+                        }
+                    }
+                    EngineEvent::TaskError { task_id, message } => {
+                        if let Some(ref tpl) = config.on_error {
+                            run_hook(
+                                tpl,
+                                &[("id", &task_id), ("error", &message)],
+                            );
+                        }
+                    }
+                    EngineEvent::TaskProgress { .. } => {} // no hook for progress
+                }
+            }
+        });
     }
 
     /// Load persisted task states from disk (for RPC server restart recovery)
