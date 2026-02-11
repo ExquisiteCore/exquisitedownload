@@ -68,8 +68,8 @@ async fn main() -> Result<()> {
 
             let engine = DownloadEngine::with_options(config, proxy.as_deref(), headers)?;
 
-            // Start hook runner so on_start/on_pause/on_error/on_complete hooks fire
-            engine.spawn_hook_runner();
+            // Subscribe before download so we capture all events
+            let mut hook_rx = engine.subscribe();
 
             let task_id = engine
                 .download(
@@ -85,6 +85,9 @@ async fn main() -> Result<()> {
                     speed_limit,
                 )
                 .await?;
+
+            // Drain all pending events and run hooks synchronously (no race)
+            engine.drain_hooks(&mut hook_rx);
 
             // Checksum verification
             if let Some((algo, expected)) = checksum {

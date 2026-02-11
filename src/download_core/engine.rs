@@ -671,10 +671,17 @@ impl DownloadEngine {
         self.event_tx.subscribe()
     }
 
-    /// Spawn a background task that listens for events and runs config hooks
-    pub fn spawn_hook_runner(&self) {
-        use crate::config::run_hook;
+    /// Drain all pending events from a receiver and run hooks synchronously.
+    /// Used by CLI mode to guarantee hooks fire before process exit.
+    pub fn drain_hooks(&self, rx: &mut broadcast::Receiver<EngineEvent>) {
+        while let Ok(event) = rx.try_recv() {
+            run_event_hooks(&self.config, event);
+        }
+    }
 
+    /// Spawn a long-lived background task that listens for events and runs config hooks.
+    /// Used by RPC mode where the server runs indefinitely.
+    pub fn spawn_hook_runner(&self) {
         let mut rx = self.event_tx.subscribe();
         let config = self.config.clone();
 
@@ -689,47 +696,7 @@ impl DownloadEngine {
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
 
-                match event {
-                    EngineEvent::TaskStarted {
-                        task_id,
-                        url,
-                        file_path,
-                    } => {
-                        if let Some(ref tpl) = config.on_start {
-                            run_hook(
-                                tpl,
-                                &[("file", &file_path), ("id", &task_id), ("url", &url)],
-                            );
-                        }
-                    }
-                    EngineEvent::TaskCompleted {
-                        task_id,
-                        file_path,
-                        size,
-                    } => {
-                        if let Some(ref tpl) = config.on_complete {
-                            run_hook(
-                                tpl,
-                                &[
-                                    ("file", &file_path),
-                                    ("size", &size.to_string()),
-                                    ("id", &task_id),
-                                ],
-                            );
-                        }
-                    }
-                    EngineEvent::TaskPaused { task_id } => {
-                        if let Some(ref tpl) = config.on_pause {
-                            run_hook(tpl, &[("id", &task_id)]);
-                        }
-                    }
-                    EngineEvent::TaskError { task_id, message } => {
-                        if let Some(ref tpl) = config.on_error {
-                            run_hook(tpl, &[("id", &task_id), ("error", &message)]);
-                        }
-                    }
-                    EngineEvent::TaskProgress { .. } => {} // no hook for progress
-                }
+                run_event_hooks(&config, event);
             }
         });
     }
@@ -751,6 +718,53 @@ impl DownloadEngine {
             task_map.insert(task.id.clone(), task);
         }
         Ok(())
+    }
+}
+
+/// Match an engine event to the corresponding config hook and run it.
+fn run_event_hooks(config: &Config, event: EngineEvent) {
+    use crate::config::run_hook;
+
+    match event {
+        EngineEvent::TaskStarted {
+            task_id,
+            url,
+            file_path,
+        } => {
+            if let Some(ref tpl) = config.on_start {
+                run_hook(
+                    tpl,
+                    &[("file", &file_path), ("id", &task_id), ("url", &url)],
+                );
+            }
+        }
+        EngineEvent::TaskCompleted {
+            task_id,
+            file_path,
+            size,
+        } => {
+            if let Some(ref tpl) = config.on_complete {
+                run_hook(
+                    tpl,
+                    &[
+                        ("file", &file_path),
+                        ("size", &size.to_string()),
+                        ("id", &task_id),
+                    ],
+                );
+            }
+        }
+        EngineEvent::TaskPaused { task_id } => {
+            if let Some(ref tpl) = config.on_pause {
+                run_hook(tpl, &[("id", &task_id)]);
+            }
+        }
+        EngineEvent::TaskError { task_id, message } => {
+            if let Some(ref tpl) = config.on_error {
+                run_hook(tpl, &[("id", &task_id), ("error", &message)]);
+            }
+        }
+        EngineEvent::TaskProgress { .. } => {}
     }
 }
 

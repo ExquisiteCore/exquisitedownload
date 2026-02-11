@@ -105,6 +105,74 @@ fn param_offset(has_secret: bool) -> usize {
     if has_secret { 1 } else { 0 }
 }
 
+/// Parsed parameters for the `addUri` RPC method.
+struct AddUriParams {
+    url: String,
+    out: Option<String>,
+    split: u8,
+    extra_headers: Vec<String>,
+    extra_cookie: Option<String>,
+}
+
+/// Parse addUri parameters from JSON-RPC params.
+/// `off` is the param offset (1 when token auth is used, 0 otherwise).
+/// `default_split` is the fallback value for the `split` option.
+fn parse_adduri_params(
+    params: &serde_json::Value,
+    off: usize,
+    default_split: u8,
+) -> anyhow::Result<AddUriParams> {
+    let url = params
+        .get(off)
+        .or_else(|| params.get("url"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing url parameter"))?;
+
+    // Second param can be a string (filename) or an options object
+    let second = params.get(off + 1);
+    let (out, options) = match second {
+        Some(v) if v.is_string() => (v.as_str().map(String::from), None),
+        Some(v) if v.is_object() => (
+            v.get("out").and_then(|v| v.as_str()).map(String::from),
+            Some(v),
+        ),
+        _ => (None, None),
+    };
+    // Also support named params as fallback
+    let out = out.or_else(|| params.get("out").and_then(|v| v.as_str()).map(String::from));
+
+    let split = options
+        .and_then(|o| o.get("split"))
+        .or_else(|| params.get("split"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(default_split as u64) as u8;
+
+    let extra_headers: Vec<String> = options
+        .and_then(|o| o.get("headers"))
+        .or_else(|| params.get("headers"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let extra_cookie = options
+        .and_then(|o| o.get("cookie"))
+        .or_else(|| params.get("cookie"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    Ok(AddUriParams {
+        url: url.to_string(),
+        out,
+        split,
+        extra_headers,
+        extra_cookie,
+    })
+}
+
 async fn dispatch(
     engine: &Arc<DownloadEngine>,
     method: &str,
@@ -115,59 +183,18 @@ async fn dispatch(
 
     match method {
         "addUri" => {
-            let url = params
-                .get(off)
-                .or_else(|| params.get("url"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing url parameter"))?;
-
-            // Second param can be a string (filename) or an options object
-            let second = params.get(off + 1);
-            let (out, options) = match second {
-                Some(v) if v.is_string() => (v.as_str().map(String::from), None),
-                Some(v) if v.is_object() => (
-                    v.get("out").and_then(|v| v.as_str()).map(String::from),
-                    Some(v),
-                ),
-                _ => (None, None),
-            };
-            // Also support named params as fallback
-            let out = out.or_else(|| params.get("out").and_then(|v| v.as_str()).map(String::from));
-
             let default_conn = engine.default_connections();
-            let split = options
-                .and_then(|o| o.get("split"))
-                .or_else(|| params.get("split"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(default_conn as u64) as u8;
-
-            // Extract per-task headers and cookie from options
-            let extra_headers: Vec<String> = options
-                .and_then(|o| o.get("headers"))
-                .or_else(|| params.get("headers"))
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let extra_cookie = options
-                .and_then(|o| o.get("cookie"))
-                .or_else(|| params.get("cookie"))
-                .and_then(|v| v.as_str())
-                .map(String::from);
+            let parsed = parse_adduri_params(params, off, default_conn)?;
 
             let task_id = engine
                 .download_background(DownloadOptions {
-                    url: url.to_string(),
-                    output: out,
+                    url: parsed.url,
+                    output: parsed.out,
                     dir: None,
-                    split,
+                    split: parsed.split,
                     max_connections: default_conn,
-                    extra_headers,
-                    extra_cookie,
+                    extra_headers: parsed.extra_headers,
+                    extra_cookie: parsed.extra_cookie,
                 })
                 .await?;
 
@@ -430,25 +457,17 @@ mod tests {
 
     #[test]
     fn test_adduri_options_parsing_string_out() {
-        // When second param is a string, it's treated as output filename
         let params = serde_json::json!(["http://example.com/file.zip", "output.zip"]);
-        let off = 0;
-        let second = params.get(off + 1);
-        let (out, options) = match second {
-            Some(v) if v.is_string() => (v.as_str().map(String::from), None),
-            Some(v) if v.is_object() => (
-                v.get("out").and_then(|v| v.as_str()).map(String::from),
-                Some(v),
-            ),
-            _ => (None, None),
-        };
-        assert_eq!(out.as_deref(), Some("output.zip"));
-        assert!(options.is_none());
+        let parsed = parse_adduri_params(&params, 0, 8).unwrap();
+        assert_eq!(parsed.url, "http://example.com/file.zip");
+        assert_eq!(parsed.out.as_deref(), Some("output.zip"));
+        assert_eq!(parsed.split, 8);
+        assert!(parsed.extra_headers.is_empty());
+        assert!(parsed.extra_cookie.is_none());
     }
 
     #[test]
     fn test_adduri_options_parsing_object() {
-        // When second param is an object, extract out/headers/cookie
         let params = serde_json::json!([
             "http://example.com/file.zip",
             {
@@ -458,53 +477,48 @@ mod tests {
                 "cookie": "sid=abc"
             }
         ]);
-        let off = 0;
-        let second = params.get(off + 1);
-        let (out, options) = match second {
-            Some(v) if v.is_string() => (v.as_str().map(String::from), None),
-            Some(v) if v.is_object() => (
-                v.get("out").and_then(|v| v.as_str()).map(String::from),
-                Some(v),
-            ),
-            _ => (None, None),
-        };
-        assert_eq!(out.as_deref(), Some("renamed.zip"));
-        let opts = options.unwrap();
-        assert_eq!(opts.get("split").unwrap().as_u64(), Some(4));
-
-        let headers: Vec<String> = opts
-            .get("headers")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert_eq!(headers, vec!["Referer: https://example.com"]);
-
-        let cookie = opts
-            .get("cookie")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        assert_eq!(cookie.as_deref(), Some("sid=abc"));
+        let parsed = parse_adduri_params(&params, 0, 8).unwrap();
+        assert_eq!(parsed.url, "http://example.com/file.zip");
+        assert_eq!(parsed.out.as_deref(), Some("renamed.zip"));
+        assert_eq!(parsed.split, 4);
+        assert_eq!(parsed.extra_headers, vec!["Referer: https://example.com"]);
+        assert_eq!(parsed.extra_cookie.as_deref(), Some("sid=abc"));
     }
 
     #[test]
     fn test_adduri_options_no_second_param() {
         let params = serde_json::json!(["http://example.com/file.zip"]);
-        let off = 0;
-        let second = params.get(off + 1);
-        let (out, options) = match second {
-            Some(v) if v.is_string() => (v.as_str().map(String::from), None),
-            Some(v) if v.is_object() => (
-                v.get("out").and_then(|v| v.as_str()).map(String::from),
-                Some(v),
-            ),
-            _ => (None, None),
-        };
-        assert!(out.is_none());
-        assert!(options.is_none());
+        let parsed = parse_adduri_params(&params, 0, 8).unwrap();
+        assert_eq!(parsed.url, "http://example.com/file.zip");
+        assert!(parsed.out.is_none());
+        assert_eq!(parsed.split, 8);
+        assert!(parsed.extra_headers.is_empty());
+        assert!(parsed.extra_cookie.is_none());
+    }
+
+    #[test]
+    fn test_adduri_with_token_offset() {
+        let params =
+            serde_json::json!(["token:secret", "http://example.com/file.zip", {"out": "a.zip"}]);
+        let parsed = parse_adduri_params(&params, 1, 8).unwrap();
+        assert_eq!(parsed.url, "http://example.com/file.zip");
+        assert_eq!(parsed.out.as_deref(), Some("a.zip"));
+    }
+
+    #[test]
+    fn test_adduri_missing_url() {
+        let params = serde_json::json!([]);
+        assert!(parse_adduri_params(&params, 0, 8).is_err());
+    }
+
+    #[test]
+    fn test_adduri_named_params() {
+        let params =
+            serde_json::json!({"url": "http://example.com/f.zip", "out": "o.zip", "split": 2});
+        let parsed = parse_adduri_params(&params, 0, 8).unwrap();
+        assert_eq!(parsed.url, "http://example.com/f.zip");
+        assert_eq!(parsed.out.as_deref(), Some("o.zip"));
+        assert_eq!(parsed.split, 2);
     }
 
     #[test]
