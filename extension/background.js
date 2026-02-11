@@ -40,6 +40,27 @@ async function rpcCall(method, params = []) {
   return data.result;
 }
 
+// --- Helpers ---
+
+async function getCookiesForUrl(url) {
+  try {
+    const cookies = await chrome.cookies.getAll({ url });
+    if (cookies.length === 0) return null;
+    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch {
+    return null;
+  }
+}
+
+function buildOptions(cookie, referrer) {
+  const opts = {};
+  const headers = [];
+  if (referrer) headers.push(`Referer: ${referrer}`);
+  if (headers.length > 0) opts.headers = headers;
+  if (cookie) opts.cookie = cookie;
+  return Object.keys(opts).length > 0 ? opts : null;
+}
+
 // --- Context Menu ---
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -50,10 +71,14 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-chrome.contextMenus.onClicked.addListener(async (info) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "edl-download" && info.linkUrl) {
     try {
-      const taskId = await rpcCall("addUri", [info.linkUrl]);
+      const cookie = await getCookiesForUrl(info.linkUrl);
+      const referrer = tab?.url || info.pageUrl;
+      const opts = buildOptions(cookie, referrer);
+      const params = opts ? [info.linkUrl, opts] : [info.linkUrl];
+      const taskId = await rpcCall("addUri", params);
       chrome.notifications.create({
         type: "basic",
         iconUrl: "icons/icon128.png",
@@ -115,9 +140,15 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
   chrome.downloads.cancel(downloadItem.id);
   chrome.downloads.erase({ id: downloadItem.id });
 
+  // Capture cookies and referrer for the download URL
+  const cookie = await getCookiesForUrl(url);
+  const referrer = downloadItem.referrer || undefined;
+  const opts = buildOptions(cookie, referrer);
+  const params = opts ? [url, opts] : [url];
+
   // Send to edl
   try {
-    await rpcCall("addUri", [url]);
+    await rpcCall("addUri", params);
     chrome.notifications.create({
       type: "basic",
       iconUrl: "icons/icon128.png",
