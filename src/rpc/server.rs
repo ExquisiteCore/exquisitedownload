@@ -307,10 +307,10 @@ async fn handle_ws(socket: WebSocket, state: AppState) {
                 event = event_rx.recv() => {
                     match event {
                         Ok(e) => {
-                            if let Ok(json) = serde_json::to_string(&e) {
-                                if ws_tx.send(Message::Text(json.into())).await.is_err() {
-                                    break;
-                                }
+                            if let Ok(json) = serde_json::to_string(&e)
+                                && ws_tx.send(Message::Text(json.into())).await.is_err()
+                            {
+                                break;
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

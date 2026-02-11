@@ -35,6 +35,7 @@ pub struct DownloadOptions {
 /// Lifecycle events emitted by the download engine.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
+#[allow(clippy::enum_variant_names)]
 pub enum EngineEvent {
     TaskStarted {
         task_id: String,
