@@ -91,9 +91,7 @@ pub async fn fetch_metadata(
         (r, false)
     } else {
         // Fallback: GET with Range to minimise data transfer
-        let mut get_req = client
-            .get(url)
-            .header(reqwest::header::RANGE, "bytes=0-0");
+        let mut get_req = client.get(url).header(reqwest::header::RANGE, "bytes=0-0");
         if let Some(hdrs) = extra_headers {
             for (k, v) in hdrs {
                 get_req = get_req.header(k, v);

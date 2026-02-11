@@ -132,23 +132,18 @@ impl DownloadEngine {
         tokio::fs::create_dir_all(&download_dir).await?;
 
         // Build per-task extra headers for metadata requests
-        let extra_hdr_map =
-            if !extra_headers.is_empty() || extra_cookie.is_some() {
-                Some(
-                    http::parse_headers(&extra_headers, extra_cookie.as_deref())
-                        .unwrap_or_default(),
-                )
-            } else {
-                None
-            };
+        let extra_hdr_map = if !extra_headers.is_empty() || extra_cookie.is_some() {
+            Some(http::parse_headers(&extra_headers, extra_cookie.as_deref()).unwrap_or_default())
+        } else {
+            None
+        };
 
         // Check for resumable state
         let existing = state::find_state_by_url(&url, &download_dir).await?;
 
         if let Some(mut prev) = existing {
             // ETag validation: re-fetch metadata and compare
-            let metadata =
-                http::fetch_metadata(&self.client, &url, extra_hdr_map.as_ref()).await?;
+            let metadata = http::fetch_metadata(&self.client, &url, extra_hdr_map.as_ref()).await?;
             let etag_mismatch = matches!(
                 (&prev.etag, &metadata.etag),
                 (Some(old), Some(new)) if old != new
@@ -190,8 +185,7 @@ impl DownloadEngine {
 
         // New download
         info!("Fetching file info from {}", url);
-        let metadata =
-            http::fetch_metadata(&self.client, &url, extra_hdr_map.as_ref()).await?;
+        let metadata = http::fetch_metadata(&self.client, &url, extra_hdr_map.as_ref()).await?;
 
         // Use the final URL after redirects for Range requests
         let effective_url = metadata.final_url.clone().unwrap_or(url);
@@ -276,7 +270,15 @@ impl DownloadEngine {
         extra_cookie: Option<String>,
     ) -> Result<String> {
         let task = self
-            .prepare_download(url, output, dir, split, max_connections, extra_headers, extra_cookie)
+            .prepare_download(
+                url,
+                output,
+                dir,
+                split,
+                max_connections,
+                extra_headers,
+                extra_cookie,
+            )
             .await?;
         let task_id = task.id.clone();
 
@@ -325,11 +327,7 @@ impl DownloadEngine {
         }
 
         // Emit TaskStarted event
-        let file_path_str = task
-            .file_path
-            .to_str()
-            .unwrap_or_default()
-            .to_string();
+        let file_path_str = task.file_path.to_str().unwrap_or_default().to_string();
         let _ = self.event_tx.send(EngineEvent::TaskStarted {
             task_id: task_id.clone(),
             url: task.url.clone(),
@@ -740,10 +738,7 @@ impl DownloadEngine {
                     }
                     EngineEvent::TaskError { task_id, message } => {
                         if let Some(ref tpl) = config.on_error {
-                            run_hook(
-                                tpl,
-                                &[("id", &task_id), ("error", &message)],
-                            );
+                            run_hook(tpl, &[("id", &task_id), ("error", &message)]);
                         }
                     }
                     EngineEvent::TaskProgress { .. } => {} // no hook for progress

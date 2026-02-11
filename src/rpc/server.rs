@@ -132,9 +132,7 @@ async fn dispatch(
                 _ => (None, None),
             };
             // Also support named params as fallback
-            let out = out.or_else(|| {
-                params.get("out").and_then(|v| v.as_str()).map(String::from)
-            });
+            let out = out.or_else(|| params.get("out").and_then(|v| v.as_str()).map(String::from));
 
             let default_conn = engine.default_connections();
             let split = options
@@ -342,8 +340,7 @@ async fn handle_ws(socket: WebSocket, state: AppState) {
                     .and_then(|v| v.as_str())
                     .is_some_and(|t| t == expected);
                 if !token_ok {
-                    let resp =
-                        RpcResponse::error(req.id, -32600, "Unauthorized".into());
+                    let resp = RpcResponse::error(req.id, -32600, "Unauthorized".into());
                     if let Ok(json) = serde_json::to_string(&resp) {
                         let _ = resp_tx.send(json).await;
                     }
