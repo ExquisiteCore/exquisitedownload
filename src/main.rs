@@ -59,6 +59,11 @@ async fn main() -> Result<()> {
                 Some(custom_headers)
             };
 
+            let split = args.split.unwrap_or(config.max_connections_per_task);
+            let max_connections = args
+                .max_connections
+                .unwrap_or(config.max_connections_per_task);
+
             let engine = DownloadEngine::with_options(config, proxy.as_deref(), headers)?;
 
             let task_id = engine
@@ -66,8 +71,8 @@ async fn main() -> Result<()> {
                     args.url,
                     args.out,
                     args.dir.clone(),
-                    args.split,
-                    args.max_connections,
+                    split,
+                    max_connections,
                     speed_limit,
                 )
                 .await?;

@@ -56,13 +56,13 @@ pub struct DownloadArgs {
     #[arg(short, long)]
     pub dir: Option<PathBuf>,
 
-    /// Number of segments (default: 8)
-    #[arg(short, long, default_value_t = 8)]
-    pub split: u8,
+    /// Number of segments (default: from config, usually 8)
+    #[arg(short, long)]
+    pub split: Option<u8>,
 
-    /// Max connections per task
-    #[arg(short = 'x', long, default_value_t = 8)]
-    pub max_connections: u8,
+    /// Max connections per task (default: from config, usually 8)
+    #[arg(short = 'x', long)]
+    pub max_connections: Option<u8>,
 
     /// Speed limit (e.g., 1M, 500K)
     #[arg(long)]

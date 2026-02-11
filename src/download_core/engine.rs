@@ -500,7 +500,10 @@ impl DownloadEngine {
 
         let url = task.url.clone();
         let dir = task.download_dir.clone();
-        self.download_background(url, None, Some(dir), 8, 8).await?;
+        let split = task.segments.len() as u8;
+        let max_conn = task.max_connections;
+        self.download_background(url, None, Some(dir), split, max_conn)
+            .await?;
         Ok(())
     }
 
@@ -559,6 +562,10 @@ impl DownloadEngine {
 
     pub fn set_speed_limit(&self, limit: u64) {
         self.speed_limiter.set_limit(limit);
+    }
+
+    pub fn default_connections(&self) -> u8 {
+        self.config.max_connections_per_task
     }
 
     /// Load persisted task states from disk (for RPC server restart recovery)

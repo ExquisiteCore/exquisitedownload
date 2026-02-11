@@ -124,10 +124,14 @@ async fn dispatch(
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
-            let split = params.get("split").and_then(|v| v.as_u64()).unwrap_or(8) as u8;
+            let default_conn = engine.default_connections();
+            let split = params
+                .get("split")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(default_conn as u64) as u8;
 
             let task_id = engine
-                .download_background(url.to_string(), out, None, split, 8)
+                .download_background(url.to_string(), out, None, split, default_conn)
                 .await?;
 
             Ok(serde_json::json!(task_id))
