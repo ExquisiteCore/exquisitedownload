@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
-use crate::download_core::engine::DownloadEngine;
+use crate::download_core::engine::{DownloadEngine, DownloadOptions};
 use crate::download_core::task::TaskStatus;
 
 /// Shared application state for the RPC server
@@ -160,15 +160,15 @@ async fn dispatch(
                 .map(String::from);
 
             let task_id = engine
-                .download_background(
-                    url.to_string(),
-                    out,
-                    None,
+                .download_background(DownloadOptions {
+                    url: url.to_string(),
+                    output: out,
+                    dir: None,
                     split,
-                    default_conn,
+                    max_connections: default_conn,
                     extra_headers,
                     extra_cookie,
-                )
+                })
                 .await?;
 
             Ok(serde_json::json!(task_id))
@@ -274,7 +274,7 @@ async fn handle_ws(socket: WebSocket, state: AppState) {
     let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<String>(32);
 
     // Write task: forward both engine events and RPC responses to the client
-    let write_task = tokio::spawn(async move {
+    let mut write_task = tokio::spawn(async move {
         loop {
             tokio::select! {
                 event = event_rx.recv() => {
@@ -308,7 +308,7 @@ async fn handle_ws(socket: WebSocket, state: AppState) {
     let engine = state.engine.clone();
     let has_secret = state.secret.is_some();
     let secret = state.secret.clone();
-    let read_task = tokio::spawn(async move {
+    let mut read_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             let text = match msg {
                 Message::Text(t) => t,
@@ -360,8 +360,12 @@ async fn handle_ws(socket: WebSocket, state: AppState) {
     });
 
     tokio::select! {
-        _ = write_task => {},
-        _ = read_task => {},
+        _ = &mut write_task => {
+            read_task.abort();
+        },
+        _ = &mut read_task => {
+            write_task.abort();
+        },
     }
 }
 
@@ -385,4 +389,142 @@ pub async fn start_rpc_server(
     info!("JSON-RPC server listening on {}", addr);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_param_offset() {
+        assert_eq!(param_offset(false), 0);
+        assert_eq!(param_offset(true), 1);
+    }
+
+    #[test]
+    fn test_extract_task_id_positional() {
+        let params = serde_json::json!(["task-123"]);
+        let id = extract_task_id(&params, 0).unwrap();
+        assert_eq!(id, "task-123");
+    }
+
+    #[test]
+    fn test_extract_task_id_with_offset() {
+        let params = serde_json::json!(["token:secret", "task-456"]);
+        let id = extract_task_id(&params, 1).unwrap();
+        assert_eq!(id, "task-456");
+    }
+
+    #[test]
+    fn test_extract_task_id_named() {
+        let params = serde_json::json!({"gid": "task-789"});
+        let id = extract_task_id(&params, 0).unwrap();
+        assert_eq!(id, "task-789");
+    }
+
+    #[test]
+    fn test_extract_task_id_missing() {
+        let params = serde_json::json!([]);
+        assert!(extract_task_id(&params, 0).is_err());
+    }
+
+    #[test]
+    fn test_adduri_options_parsing_string_out() {
+        // When second param is a string, it's treated as output filename
+        let params = serde_json::json!(["http://example.com/file.zip", "output.zip"]);
+        let off = 0;
+        let second = params.get(off + 1);
+        let (out, options) = match second {
+            Some(v) if v.is_string() => (v.as_str().map(String::from), None),
+            Some(v) if v.is_object() => (
+                v.get("out").and_then(|v| v.as_str()).map(String::from),
+                Some(v),
+            ),
+            _ => (None, None),
+        };
+        assert_eq!(out.as_deref(), Some("output.zip"));
+        assert!(options.is_none());
+    }
+
+    #[test]
+    fn test_adduri_options_parsing_object() {
+        // When second param is an object, extract out/headers/cookie
+        let params = serde_json::json!([
+            "http://example.com/file.zip",
+            {
+                "out": "renamed.zip",
+                "split": 4,
+                "headers": ["Referer: https://example.com"],
+                "cookie": "sid=abc"
+            }
+        ]);
+        let off = 0;
+        let second = params.get(off + 1);
+        let (out, options) = match second {
+            Some(v) if v.is_string() => (v.as_str().map(String::from), None),
+            Some(v) if v.is_object() => (
+                v.get("out").and_then(|v| v.as_str()).map(String::from),
+                Some(v),
+            ),
+            _ => (None, None),
+        };
+        assert_eq!(out.as_deref(), Some("renamed.zip"));
+        let opts = options.unwrap();
+        assert_eq!(opts.get("split").unwrap().as_u64(), Some(4));
+
+        let headers: Vec<String> = opts
+            .get("headers")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(headers, vec!["Referer: https://example.com"]);
+
+        let cookie = opts
+            .get("cookie")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        assert_eq!(cookie.as_deref(), Some("sid=abc"));
+    }
+
+    #[test]
+    fn test_adduri_options_no_second_param() {
+        let params = serde_json::json!(["http://example.com/file.zip"]);
+        let off = 0;
+        let second = params.get(off + 1);
+        let (out, options) = match second {
+            Some(v) if v.is_string() => (v.as_str().map(String::from), None),
+            Some(v) if v.is_object() => (
+                v.get("out").and_then(|v| v.as_str()).map(String::from),
+                Some(v),
+            ),
+            _ => (None, None),
+        };
+        assert!(out.is_none());
+        assert!(options.is_none());
+    }
+
+    #[test]
+    fn test_rpc_response_success() {
+        let resp = RpcResponse::success(serde_json::json!(1), serde_json::json!("ok"));
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["jsonrpc"], "2.0");
+        assert_eq!(json["id"], 1);
+        assert_eq!(json["result"], "ok");
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn test_rpc_response_error() {
+        let resp = RpcResponse::error(serde_json::json!(2), -32600, "bad request".into());
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["jsonrpc"], "2.0");
+        assert_eq!(json["id"], 2);
+        assert!(json.get("result").is_none());
+        assert_eq!(json["error"]["code"], -32600);
+        assert_eq!(json["error"]["message"], "bad request");
+    }
 }

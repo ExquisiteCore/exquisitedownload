@@ -20,6 +20,18 @@ use super::segment::{create_segments, create_single_segment};
 use super::task::{DownloadTask, TaskStatus};
 use super::worker::{self, ProgressCallback};
 
+/// Options for creating a new download task.
+/// Used by `prepare_download`, `download`, and `download_background`.
+pub struct DownloadOptions {
+    pub url: String,
+    pub output: Option<String>,
+    pub dir: Option<PathBuf>,
+    pub split: u8,
+    pub max_connections: u8,
+    pub extra_headers: Vec<String>,
+    pub extra_cookie: Option<String>,
+}
+
 /// Lifecycle events emitted by the download engine.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type")]
@@ -118,17 +130,14 @@ impl DownloadEngine {
 
     /// Prepare a download task (create or resume) and return its id.
     /// Does NOT run the download — use `run_task` for that.
-    pub async fn prepare_download(
-        &self,
-        url: String,
-        output: Option<String>,
-        dir: Option<PathBuf>,
-        split: u8,
-        max_connections: u8,
-        extra_headers: Vec<String>,
-        extra_cookie: Option<String>,
-    ) -> Result<DownloadTask> {
-        let download_dir = dir.unwrap_or_else(|| self.config.download_dir.clone());
+    pub async fn prepare_download(&self, opts: DownloadOptions) -> Result<DownloadTask> {
+        let url = opts.url;
+        let output = opts.output;
+        let split = opts.split;
+        let max_connections = opts.max_connections;
+        let extra_headers = opts.extra_headers;
+        let extra_cookie = opts.extra_cookie;
+        let download_dir = opts.dir.unwrap_or_else(|| self.config.download_dir.clone());
         tokio::fs::create_dir_all(&download_dir).await?;
 
         // Build per-task extra headers for metadata requests
@@ -237,16 +246,10 @@ impl DownloadEngine {
     /// Used by CLI direct download.
     pub async fn download(
         &self,
-        url: String,
-        output: Option<String>,
-        dir: Option<PathBuf>,
-        split: u8,
-        max_connections: u8,
+        opts: DownloadOptions,
         speed_limit_override: Option<u64>,
     ) -> Result<String> {
-        let task = self
-            .prepare_download(url, output, dir, split, max_connections, Vec::new(), None)
-            .await?;
+        let task = self.prepare_download(opts).await?;
         let task_id = task.id.clone();
 
         if let Some(limit) = speed_limit_override {
@@ -261,25 +264,9 @@ impl DownloadEngine {
     /// Used by RPC `addUri`.
     pub async fn download_background(
         self: &Arc<Self>,
-        url: String,
-        output: Option<String>,
-        dir: Option<PathBuf>,
-        split: u8,
-        max_connections: u8,
-        extra_headers: Vec<String>,
-        extra_cookie: Option<String>,
+        opts: DownloadOptions,
     ) -> Result<String> {
-        let task = self
-            .prepare_download(
-                url,
-                output,
-                dir,
-                split,
-                max_connections,
-                extra_headers,
-                extra_cookie,
-            )
-            .await?;
+        let task = self.prepare_download(opts).await?;
         let task_id = task.id.clone();
 
         let engine = self.clone();
@@ -608,8 +595,16 @@ impl DownloadEngine {
         let max_conn = task.max_connections;
         let headers = task.extra_headers.clone();
         let cookie = task.extra_cookie.clone();
-        self.download_background(url, None, Some(dir), split, max_conn, headers, cookie)
-            .await?;
+        self.download_background(DownloadOptions {
+            url,
+            output: None,
+            dir: Some(dir),
+            split,
+            max_connections: max_conn,
+            extra_headers: headers,
+            extra_cookie: cookie,
+        })
+        .await?;
         Ok(())
     }
 
@@ -677,11 +672,6 @@ impl DownloadEngine {
     /// Subscribe to engine lifecycle events (for WebSocket, hooks, etc.)
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
         self.event_tx.subscribe()
-    }
-
-    /// Get a reference to the engine config
-    pub fn config(&self) -> &Config {
-        &self.config
     }
 
     /// Spawn a background task that listens for events and runs config hooks

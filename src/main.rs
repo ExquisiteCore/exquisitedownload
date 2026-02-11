@@ -15,7 +15,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Commands};
-use download_core::engine::DownloadEngine;
+use download_core::engine::{DownloadEngine, DownloadOptions};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -45,7 +45,9 @@ async fn main() -> Result<()> {
 
             // CLI args override config file
             let proxy = args.proxy.or(config.proxy.take());
-            let on_complete = args.on_complete.or(config.on_complete.take());
+            if let Some(on_complete) = args.on_complete {
+                config.on_complete = Some(on_complete);
+            }
 
             // Merge headers: CLI args take priority, config as fallback
             let mut all_headers = config.headers.clone();
@@ -66,13 +68,20 @@ async fn main() -> Result<()> {
 
             let engine = DownloadEngine::with_options(config, proxy.as_deref(), headers)?;
 
+            // Start hook runner so on_start/on_pause/on_error/on_complete hooks fire
+            engine.spawn_hook_runner();
+
             let task_id = engine
                 .download(
-                    args.url,
-                    args.out,
-                    args.dir.clone(),
-                    split,
-                    max_connections,
+                    DownloadOptions {
+                        url: args.url,
+                        output: args.out,
+                        dir: args.dir.clone(),
+                        split,
+                        max_connections,
+                        extra_headers: Vec::new(),
+                        extra_cookie: None,
+                    },
                     speed_limit,
                 )
                 .await?;
@@ -84,16 +93,6 @@ async fn main() -> Result<()> {
                     info!("Verifying {} checksum...", algo);
                     util::checksum::verify_file(&task.file_path, algo, expected).await?;
                     info!("Checksum OK ({})", algo);
-                }
-            }
-
-            // On-complete notification
-            if let Some(ref cmd) = on_complete {
-                let task = engine.get_task(&task_id).await;
-                if let Some(task) = task {
-                    let file_str = task.file_path.display().to_string();
-                    let size = task.downloaded_bytes();
-                    config::run_on_complete(cmd, &file_str, size, &task_id);
                 }
             }
 

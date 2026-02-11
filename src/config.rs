@@ -300,18 +300,6 @@ pub fn run_hook(cmd_template: &str, vars: &[(&str, &str)]) {
     }
 }
 
-/// Execute on-complete command with placeholder substitution
-pub fn run_on_complete(cmd_template: &str, file_path: &str, size: u64, task_id: &str) {
-    run_hook(
-        cmd_template,
-        &[
-            ("file", file_path),
-            ("size", &size.to_string()),
-            ("id", task_id),
-        ],
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +356,30 @@ mod tests {
             .replace("{size}", "1024")
             .replace("{id}", "abc123");
         assert_eq!(cmd, "echo test.zip 1024 abc123");
+    }
+
+    #[test]
+    fn test_run_hook_substitution() {
+        // Verify run_hook's placeholder logic by replicating it
+        let template = "notify {id} {url} {error}";
+        let vars = [("id", "task1"), ("url", "http://x.com"), ("error", "timeout")];
+        let mut cmd = template.to_string();
+        for (key, val) in &vars {
+            cmd = cmd.replace(&format!("{{{}}}", key), val);
+        }
+        assert_eq!(cmd, "notify task1 http://x.com timeout");
+    }
+
+    #[test]
+    fn test_run_hook_missing_placeholder() {
+        // Placeholders not in vars should remain unchanged
+        let template = "echo {file} {unknown}";
+        let vars = [("file", "test.zip")];
+        let mut cmd = template.to_string();
+        for (key, val) in &vars {
+            cmd = cmd.replace(&format!("{{{}}}", key), val);
+        }
+        assert_eq!(cmd, "echo test.zip {unknown}");
     }
 
     #[test]

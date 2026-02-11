@@ -29,10 +29,10 @@ pub struct DownloadTask {
     pub download_dir: PathBuf,
     pub error_message: Option<String>,
     /// Per-task extra HTTP headers (e.g., ["Referer: https://..."])
-    #[serde(default)]
+    #[serde(skip)]
     pub extra_headers: Vec<String>,
     /// Per-task cookie string (e.g., "sid=abc; token=xyz")
-    #[serde(default)]
+    #[serde(skip)]
     pub extra_cookie: Option<String>,
 }
 
@@ -149,5 +149,38 @@ mod tests {
         let s2 = Segment::new(1, 100, 200);
         let task = make_task(vec![s1, s2], Some(200));
         assert!(!task.is_complete());
+    }
+
+    #[test]
+    fn test_extra_headers_not_serialized() {
+        let mut task = DownloadTask::new(
+            "http://example.com/file".into(),
+            "file.zip".into(),
+            ".".into(),
+            8,
+        );
+        task.extra_headers = vec!["Referer: https://example.com".into()];
+        task.extra_cookie = Some("sid=abc".into());
+        let json = serde_json::to_value(&task).unwrap();
+        // extra_headers and extra_cookie should be skipped by serde
+        assert!(json.get("extra_headers").is_none());
+        assert!(json.get("extra_cookie").is_none());
+    }
+
+    #[test]
+    fn test_deserialize_without_extra_fields() {
+        // Simulates loading a state file that was saved before extra_headers/extra_cookie existed
+        let mut task = DownloadTask::new(
+            "http://example.com/file".into(),
+            "file.zip".into(),
+            ".".into(),
+            4,
+        );
+        task.segments = vec![Segment::new(0, 0, 100)];
+        let json = serde_json::to_string(&task).unwrap();
+        let restored: DownloadTask = serde_json::from_str(&json).unwrap();
+        assert!(restored.extra_headers.is_empty());
+        assert!(restored.extra_cookie.is_none());
+        assert_eq!(restored.max_connections, 4);
     }
 }
