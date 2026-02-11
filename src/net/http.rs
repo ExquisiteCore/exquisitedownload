@@ -58,18 +58,41 @@ pub fn build_client(
     builder.build().context("failed to build HTTP client")
 }
 
-/// Send a HEAD request to get file metadata
+/// Fetch file metadata. Tries HEAD first; if the server rejects HEAD
+/// (404, 405, etc.), falls back to GET with `Range: bytes=0-0` so we
+/// can still obtain headers without downloading the whole file.
 pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> {
-    let resp = client
-        .head(url)
-        .send()
-        .await
-        .context("HEAD request failed")?;
+    // Try HEAD first
+    let head_ok = match client.head(url).send().await {
+        Ok(r) if r.status().is_success() => Some(r),
+        Ok(r) => {
+            tracing::debug!("HEAD returned {}, falling back to GET", r.status());
+            None
+        }
+        Err(e) => {
+            tracing::debug!("HEAD failed ({}), falling back to GET", e);
+            None
+        }
+    };
 
-    let status = resp.status();
-    if !status.is_success() {
-        anyhow::bail!("HEAD request returned status {}", status);
-    }
+    let (resp, used_get_range) = if let Some(r) = head_ok {
+        (r, false)
+    } else {
+        // Fallback: GET with Range to minimise data transfer
+        let r = client
+            .get(url)
+            .header(reqwest::header::RANGE, "bytes=0-0")
+            .send()
+            .await
+            .context("GET fallback request failed")?;
+        let status = r.status();
+        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            anyhow::bail!("request returned status {}", status);
+        }
+        (r, true)
+    };
+
+    let is_partial = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
 
     // Capture the final URL after redirects
     let final_url = {
@@ -83,15 +106,28 @@ pub async fn fetch_metadata(client: &Client, url: &str) -> Result<FileMetadata> 
 
     let headers = resp.headers();
 
-    let content_length = headers
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
+    // When we got 206 from a Range request, Content-Length is just the
+    // partial body size (1 byte). The real total is in Content-Range.
+    let content_length = if is_partial && used_get_range {
+        // Content-Range: bytes 0-0/TOTAL
+        headers
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit('/').next())
+            .and_then(|v| v.parse::<u64>().ok())
+    } else {
+        headers
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+    };
 
-    let supports_range = headers
-        .get(reqwest::header::ACCEPT_RANGES)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("bytes"));
+    // 206 response proves the server supports Range
+    let supports_range = is_partial
+        || headers
+            .get(reqwest::header::ACCEPT_RANGES)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("bytes"));
 
     let filename = extract_filename(headers, resp.url().as_str());
 
