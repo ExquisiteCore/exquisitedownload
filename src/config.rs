@@ -7,10 +7,12 @@ use tracing::info;
 
 /// Runtime configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub max_concurrent_tasks: usize,
     pub max_connections_per_task: u8,
     pub download_dir: PathBuf,
+    #[serde(default, deserialize_with = "deserialize_speed_limit")]
     pub max_speed: Option<u64>,
     pub rpc_listen_addr: SocketAddr,
     pub rpc_secret: Option<String>,
@@ -31,32 +33,6 @@ pub struct Config {
     pub headers: Vec<String>,
     /// Cookie string
     pub cookie: Option<String>,
-}
-
-/// TOML-friendly config structure (all fields optional, uses strings)
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct FileConfig {
-    max_concurrent_tasks: Option<usize>,
-    max_connections_per_task: Option<u8>,
-    download_dir: Option<String>,
-    /// Speed limit as human string like "1M", "500K"
-    max_speed: Option<String>,
-    rpc_listen_addr: Option<String>,
-    rpc_secret: Option<String>,
-    user_agent: Option<String>,
-    timeout_secs: Option<u64>,
-    retry_count: Option<u32>,
-    max_redirects: Option<u32>,
-    proxy: Option<String>,
-    on_complete: Option<String>,
-    on_start: Option<String>,
-    on_pause: Option<String>,
-    on_error: Option<String>,
-    /// Custom HTTP headers
-    headers: Option<Vec<String>>,
-    /// Cookie string
-    cookie: Option<String>,
 }
 
 impl Default for Config {
@@ -113,70 +89,14 @@ pub fn config_path() -> PathBuf {
 /// Creates a default config file if none exists.
 pub fn load_config() -> Result<Config> {
     let path = config_path();
-    let mut config = Config::default();
 
     if path.exists() {
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
-        let file_cfg: FileConfig = toml::from_str(&content)
+        let config: Config = toml::from_str(&content)
             .with_context(|| format!("failed to parse config file: {}", path.display()))?;
-
-        // Merge file config into defaults
-        if let Some(v) = file_cfg.max_concurrent_tasks {
-            config.max_concurrent_tasks = v;
-        }
-        if let Some(v) = file_cfg.max_connections_per_task {
-            config.max_connections_per_task = v;
-        }
-        if let Some(v) = file_cfg.download_dir {
-            config.download_dir = PathBuf::from(v);
-        }
-        if let Some(v) = &file_cfg.max_speed {
-            config.max_speed = Some(parse_speed_limit(v)?);
-        }
-        if let Some(v) = &file_cfg.rpc_listen_addr {
-            config.rpc_listen_addr = v
-                .parse()
-                .with_context(|| format!("invalid rpc_listen_addr: {}", v))?;
-        }
-        if let Some(v) = file_cfg.rpc_secret {
-            config.rpc_secret = Some(v);
-        }
-        if let Some(v) = file_cfg.user_agent {
-            config.user_agent = v;
-        }
-        if let Some(v) = file_cfg.timeout_secs {
-            config.timeout_secs = v;
-        }
-        if let Some(v) = file_cfg.retry_count {
-            config.retry_count = v;
-        }
-        if let Some(v) = file_cfg.max_redirects {
-            config.max_redirects = v;
-        }
-        if let Some(v) = file_cfg.proxy {
-            config.proxy = Some(v);
-        }
-        if let Some(v) = file_cfg.on_complete {
-            config.on_complete = Some(v);
-        }
-        if let Some(v) = file_cfg.on_start {
-            config.on_start = Some(v);
-        }
-        if let Some(v) = file_cfg.on_pause {
-            config.on_pause = Some(v);
-        }
-        if let Some(v) = file_cfg.on_error {
-            config.on_error = Some(v);
-        }
-        if let Some(v) = file_cfg.headers {
-            config.headers = v;
-        }
-        if let Some(v) = file_cfg.cookie {
-            config.cookie = Some(v);
-        }
-
         info!("Loaded config from {}", path.display());
+        Ok(config)
     } else {
         // Create default config file for the user
         if let Some(parent) = path.parent() {
@@ -186,9 +106,8 @@ pub fn load_config() -> Result<Config> {
         if std::fs::write(&path, &default_content).is_ok() {
             info!("Created default config at {}", path.display());
         }
+        Ok(Config::default())
     }
-
-    Ok(config)
 }
 
 fn generate_default_config() -> String {
@@ -255,6 +174,18 @@ fn generate_default_config() -> String {
         download_dir = download_dir.replace('\\', "\\\\"),
         version = env!("CARGO_PKG_VERSION"),
     )
+}
+
+/// Deserialize `max_speed` from a human-readable string like "1M", "500K".
+fn deserialize_speed_limit<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        None => Ok(None),
+        Some(s) => parse_speed_limit(&s).map(Some).map_err(serde::de::Error::custom),
+    }
 }
 
 /// Parse speed limit string like "1M", "500K", "1024" into bytes/sec
