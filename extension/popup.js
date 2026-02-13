@@ -41,33 +41,46 @@ function statusClass(status) {
   return (status || "").toLowerCase();
 }
 
-async function rpc(method, params = []) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(
-      { type: "rpc", method, params },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else if (response && response.success) {
-          resolve(response.result);
-        } else {
-          reject(new Error(response?.error || "RPC failed"));
-        }
-      }
-    );
-  });
-}
-
 // SVG icons for action buttons
 const ICON_PAUSE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>`;
 const ICON_RESUME = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>`;
 const ICON_REMOVE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
-// Client-side speed tracking (server doesn't provide speed)
-const prevDownloaded = new Map();
-let lastRefreshTime = 0;
+// --- Port-based RPC ---
+
+const port = chrome.runtime.connect({ name: "popup" });
+let rpcIdCounter = 0;
+const rpcCallbacks = new Map();
+
+function rpc(method, params = []) {
+  return new Promise((resolve, reject) => {
+    const id = ++rpcIdCounter;
+    rpcCallbacks.set(id, { resolve, reject });
+    port.postMessage({ type: "rpc", id, method, params });
+  });
+}
+
+// --- Speed tracking from WS events ---
+
+const prevProgress = new Map();
+
+function computeSpeed(taskId, downloaded) {
+  const now = Date.now();
+  const prev = prevProgress.get(taskId);
+  let speed = 0;
+  if (prev && now - prev.time > 100) {
+    speed = Math.max(0, (downloaded - prev.downloaded) / ((now - prev.time) / 1000));
+  }
+  prevProgress.set(taskId, { downloaded, time: now });
+  return speed;
+}
+
+// --- Task data ---
+
+const taskMap = new Map();
 
 function getDownloaded(task) {
+  if (task._downloaded != null) return task._downloaded;
   return (task.segments || []).reduce((sum, s) => sum + (s.downloaded || 0), 0);
 }
 
@@ -188,90 +201,168 @@ const OFFLINE_HTML = `
     <div class="empty-hint">请确认已启动 edl rpc</div>
   </div>`;
 
-async function refresh() {
-  try {
-    const [stats, active, waiting, stopped] = await Promise.all([
-      rpc("getGlobalStat"),
-      rpc("tellActive"),
-      rpc("tellWaiting"),
-      rpc("tellStopped"),
-    ]);
+// --- State rendering ---
 
-    $("statusDot").className = "status-dot online";
-    $("statActive").textContent = stats.active || 0;
-    $("statWaiting").textContent = stats.waiting || 0;
-    $("statStopped").textContent = stats.stopped || 0;
+function renderFullState(tasks, stats, connected) {
+  $("statusDot").className = "status-dot " + (connected ? "online" : "offline");
 
-    const allTasks = [
-      ...(active || []),
-      ...(waiting || []),
-      ...(stopped || []),
-    ];
-
-    // Calculate per-task speed from download delta
-    const now = Date.now();
-    const timeDelta = lastRefreshTime > 0 ? (now - lastRefreshTime) / 1000 : 0;
-    lastRefreshTime = now;
-
-    const currentIds = new Set();
-    allTasks.forEach((task) => {
-      const id = String(task.id);
-      currentIds.add(id);
-      const downloaded = getDownloaded(task);
-      const prev = prevDownloaded.get(id);
-      if (prev !== undefined && timeDelta > 0 && task.status === "Downloading") {
-        task._speed = Math.max(0, (downloaded - prev) / timeDelta);
-      } else {
-        task._speed = 0;
-      }
-      prevDownloaded.set(id, downloaded);
-    });
-
-    // Clean up stale entries
-    for (const id of prevDownloaded.keys()) {
-      if (!currentIds.has(id)) prevDownloaded.delete(id);
-    }
-
-    const taskList = $("taskList");
-
-    if (allTasks.length === 0) {
-      taskList.innerHTML = EMPTY_TASKS_HTML;
-      return;
-    }
-
-    // Remove empty placeholder if present
-    const emptyEl = taskList.querySelector(".empty");
-    if (emptyEl) emptyEl.remove();
-
-    // Remove elements for tasks that no longer exist
-    taskList.querySelectorAll(".task-item").forEach((el) => {
-      if (!currentIds.has(el.dataset.id)) el.remove();
-    });
-
-    // Update existing or create new task elements
-    allTasks.forEach((task) => {
-      const id = String(task.id);
-      const el = taskList.querySelector(`.task-item[data-id="${CSS.escape(id)}"]`);
-      if (el) {
-        updateTaskElement(el, task);
-      } else {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = renderTask(task);
-        taskList.appendChild(wrapper.firstElementChild);
-      }
-    });
-
-    // Reorder to match server order (active -> waiting -> stopped)
-    allTasks.forEach((task) => {
-      const id = CSS.escape(String(task.id));
-      const el = taskList.querySelector(`.task-item[data-id="${id}"]`);
-      if (el) taskList.appendChild(el);
-    });
-  } catch (e) {
-    $("statusDot").className = "status-dot offline";
+  if (tasks.length === 0 && !connected) {
     $("taskList").innerHTML = OFFLINE_HTML;
+    $("statActive").textContent = 0;
+    $("statWaiting").textContent = 0;
+    $("statStopped").textContent = 0;
+    return;
+  }
+
+  $("statActive").textContent = stats.active || 0;
+  $("statWaiting").textContent = stats.waiting || 0;
+  $("statStopped").textContent = stats.stopped || 0;
+
+  // Sync taskMap
+  const newIds = new Set();
+  tasks.forEach((task) => {
+    const id = String(task.id);
+    newIds.add(id);
+    const existing = taskMap.get(id);
+    if (existing?._speed) task._speed = existing._speed;
+    taskMap.set(id, task);
+  });
+  for (const id of taskMap.keys()) {
+    if (!newIds.has(id)) {
+      taskMap.delete(id);
+      prevProgress.delete(id);
+    }
+  }
+
+  const taskList = $("taskList");
+
+  if (tasks.length === 0) {
+    taskList.innerHTML = EMPTY_TASKS_HTML;
+    return;
+  }
+
+  // Remove placeholder
+  const placeholder = taskList.querySelector(".empty");
+  if (placeholder) placeholder.remove();
+
+  // Remove stale elements
+  taskList.querySelectorAll(".task-item").forEach((el) => {
+    if (!newIds.has(el.dataset.id)) el.remove();
+  });
+
+  // Update or create
+  tasks.forEach((task) => {
+    const id = String(task.id);
+    const el = taskList.querySelector(`.task-item[data-id="${CSS.escape(id)}"]`);
+    if (el) {
+      updateTaskElement(el, task);
+    } else {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = renderTask(task);
+      taskList.appendChild(wrapper.firstElementChild);
+    }
+  });
+
+  // Reorder to match server order (active -> waiting -> stopped)
+  tasks.forEach((task) => {
+    const id = CSS.escape(String(task.id));
+    const el = taskList.querySelector(`.task-item[data-id="${id}"]`);
+    if (el) taskList.appendChild(el);
+  });
+}
+
+// --- Incremental event handling ---
+
+function handleEvent(event) {
+  switch (event.type) {
+    case "TaskProgress": {
+      const task = taskMap.get(event.task_id);
+      if (!task) return;
+      task._downloaded = event.downloaded;
+      if (event.total != null) task.total_size = event.total;
+      task._speed = computeSpeed(event.task_id, event.downloaded);
+      const el = $("taskList").querySelector(`.task-item[data-id="${CSS.escape(event.task_id)}"]`);
+      if (el) updateTaskElement(el, task);
+      break;
+    }
+    case "TaskCompleted": {
+      const task = taskMap.get(event.task_id);
+      if (!task) return;
+      task.status = "Completed";
+      task._downloaded = event.size;
+      task.total_size = event.size;
+      task._speed = 0;
+      prevProgress.delete(event.task_id);
+      const el = $("taskList").querySelector(`.task-item[data-id="${CSS.escape(event.task_id)}"]`);
+      if (el) updateTaskElement(el, task);
+      updateStatCounters();
+      break;
+    }
+    case "TaskPaused": {
+      const task = taskMap.get(event.task_id);
+      if (!task) return;
+      task.status = "Paused";
+      task._speed = 0;
+      prevProgress.delete(event.task_id);
+      const el = $("taskList").querySelector(`.task-item[data-id="${CSS.escape(event.task_id)}"]`);
+      if (el) updateTaskElement(el, task);
+      updateStatCounters();
+      break;
+    }
+    case "TaskError": {
+      const task = taskMap.get(event.task_id);
+      if (!task) return;
+      task.status = "Error";
+      task._speed = 0;
+      prevProgress.delete(event.task_id);
+      const el = $("taskList").querySelector(`.task-item[data-id="${CSS.escape(event.task_id)}"]`);
+      if (el) updateTaskElement(el, task);
+      updateStatCounters();
+      break;
+    }
   }
 }
+
+function updateStatCounters() {
+  let active = 0, waiting = 0, stopped = 0;
+  for (const task of taskMap.values()) {
+    switch (task.status) {
+      case "Downloading": active++; break;
+      case "Pending": waiting++; break;
+      default: stopped++; break;
+    }
+  }
+  $("statActive").textContent = active;
+  $("statWaiting").textContent = waiting;
+  $("statStopped").textContent = stopped;
+}
+
+// --- Port message handler ---
+
+port.onMessage.addListener((msg) => {
+  switch (msg.type) {
+    case "state":
+      renderFullState(msg.tasks || [], msg.stats || {}, msg.wsConnected);
+      break;
+    case "event":
+      handleEvent(msg.event);
+      break;
+    case "wsStatus":
+      $("statusDot").className = "status-dot " + (msg.connected ? "online" : "offline");
+      if (msg.connected) port.postMessage({ type: "getState" });
+      break;
+    case "rpcResponse": {
+      const cb = rpcCallbacks.get(msg.id);
+      if (cb) {
+        rpcCallbacks.delete(msg.id);
+        msg.success ? cb.resolve(msg.result) : cb.reject(new Error(msg.error));
+      }
+      break;
+    }
+  }
+});
+
+// --- Actions ---
 
 async function addDownload() {
   const input = $("urlInput");
@@ -282,7 +373,6 @@ async function addDownload() {
   try {
     await rpc("addUri", [url]);
     input.value = "";
-    refresh();
   } catch (e) {
     alert("添加失败: " + e.message);
   } finally {
@@ -290,45 +380,18 @@ async function addDownload() {
   }
 }
 
-async function pauseTask(id) {
-  try {
-    await rpc("pause", [id]);
-    refresh();
-  } catch (e) {
-    console.error("Pause failed:", e);
-  }
-}
-
-async function resumeTask(id) {
-  try {
-    await rpc("unpause", [id]);
-    refresh();
-  } catch (e) {
-    console.error("Resume failed:", e);
-  }
-}
-
-async function removeTask(id) {
-  try {
-    await rpc("remove", [id]);
-    refresh();
-  } catch (e) {
-    console.error("Remove failed:", e);
-  }
-}
-
-// Event delegation for task action buttons (avoids inline onclick blocked by CSP)
+// Event delegation for task action buttons
 $("taskList").addEventListener("click", (e) => {
   const taskItem = e.target.closest(".task-item");
   if (!taskItem) return;
   const id = taskItem.dataset.id;
 
   if (e.target.closest(".btn-pause")) {
-    pauseTask(id);
+    rpc("pause", [id]).catch(console.error);
   } else if (e.target.closest(".btn-resume")) {
-    resumeTask(id);
+    rpc("unpause", [id]).catch(console.error);
   } else if (e.target.closest(".btn-remove")) {
-    removeTask(id);
+    rpc("remove", [id]).catch(console.error);
   }
 });
 
@@ -343,5 +406,10 @@ $("settingsBtn").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
 });
 
-refresh();
-setInterval(refresh, 1500);
+// Request initial state
+port.postMessage({ type: "getState" });
+
+// Fallback: full state refresh every 30s as safety net
+setInterval(() => {
+  port.postMessage({ type: "getState" });
+}, 30000);

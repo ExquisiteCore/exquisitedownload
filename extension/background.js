@@ -8,12 +8,317 @@ const DEFAULT_SETTINGS = {
   fileTypes: ".zip,.rar,.7z,.exe,.dmg,.iso,.tar.gz,.tgz,.bz2,.xz,.mp4,.mkv,.avi,.mov,.wmv,.flv,.mp3,.flac,.wav,.apk,.msi,.deb,.rpm,.pdf,.doc,.docx,.xls,.xlsx",
 };
 
-// --- RPC Communication ---
+// --- Settings ---
 
 async function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(DEFAULT_SETTINGS, resolve);
   });
+}
+
+// --- WebSocket State ---
+
+let ws = null;
+let wsConnected = false;
+let reconnectTimer = null;
+let reconnectDelay = 1000;
+const MAX_RECONNECT_DELAY = 10000;
+
+// --- Task Cache ---
+
+const taskCache = new Map();
+let globalStats = { active: 0, waiting: 0, stopped: 0 };
+
+// --- WS RPC Pending Requests ---
+
+const pendingWsRpc = new Map();
+let wsRpcIdCounter = 0;
+
+// --- Popup Ports ---
+
+const popupPorts = new Set();
+
+// --- WebSocket Connection Management ---
+
+function deriveWsUrl(rpcUrl) {
+  try {
+    const url = new URL(rpcUrl);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = "/ws";
+    return url.toString();
+  } catch {
+    return "ws://127.0.0.1:6800/ws";
+  }
+}
+
+async function connectWs() {
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
+  const settings = await getSettings();
+  const wsUrl = deriveWsUrl(settings.rpcUrl);
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch {
+    scheduleReconnect();
+    return;
+  }
+
+  ws.onopen = () => {
+    wsConnected = true;
+    reconnectDelay = 1000;
+    broadcastToPopups({ type: "wsStatus", connected: true });
+    refreshFullState();
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+
+      // JSON-RPC response
+      if (msg.jsonrpc === "2.0" && msg.id != null) {
+        const pending = pendingWsRpc.get(String(msg.id));
+        if (pending) {
+          pendingWsRpc.delete(String(msg.id));
+          msg.error
+            ? pending.reject(new Error(msg.error.message))
+            : pending.resolve(msg.result);
+        }
+        return;
+      }
+
+      // EngineEvent (has type field, no jsonrpc)
+      if (msg.type) {
+        handleEngineEvent(msg);
+      }
+    } catch {
+      // ignore parse errors
+    }
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    for (const [, pending] of pendingWsRpc) {
+      pending.reject(new Error("WebSocket closed"));
+    }
+    pendingWsRpc.clear();
+    broadcastToPopups({ type: "wsStatus", connected: false });
+    scheduleReconnect();
+  };
+
+  ws.onerror = () => {};
+}
+
+function disconnectWs() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (ws) {
+    ws.onclose = null;
+    ws.onerror = null;
+    ws.close();
+    ws = null;
+  }
+  wsConnected = false;
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectWs();
+  }, reconnectDelay);
+  reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
+}
+
+// --- Engine Event Handling ---
+
+function handleEngineEvent(event) {
+  switch (event.type) {
+    case "TaskProgress": {
+      const task = taskCache.get(event.task_id);
+      if (task) {
+        task._downloaded = event.downloaded;
+        if (event.total != null) task.total_size = event.total;
+      }
+      break;
+    }
+    case "TaskStarted": {
+      rpcCall("tellStatus", [event.task_id])
+        .then((task) => {
+          taskCache.set(String(task.id), task);
+          recomputeGlobalStats();
+          broadcastState();
+        })
+        .catch(() => {});
+      return; // wait for tellStatus before broadcasting
+    }
+    case "TaskCompleted": {
+      const task = taskCache.get(event.task_id);
+      if (task) {
+        task.status = "Completed";
+        task._downloaded = event.size;
+        task.total_size = event.size;
+      }
+      recomputeGlobalStats();
+      break;
+    }
+    case "TaskPaused": {
+      const task = taskCache.get(event.task_id);
+      if (task) task.status = "Paused";
+      recomputeGlobalStats();
+      break;
+    }
+    case "TaskError": {
+      const task = taskCache.get(event.task_id);
+      if (task) task.status = "Error";
+      recomputeGlobalStats();
+      break;
+    }
+  }
+
+  broadcastToPopups({ type: "event", event });
+}
+
+// --- Task Cache Helpers ---
+
+function recomputeGlobalStats() {
+  let active = 0, waiting = 0, stopped = 0;
+  for (const task of taskCache.values()) {
+    switch (task.status) {
+      case "Downloading": active++; break;
+      case "Pending": waiting++; break;
+      default: stopped++; break;
+    }
+  }
+  globalStats = { active, waiting, stopped };
+}
+
+async function refreshFullState() {
+  try {
+    const [stats, active, waiting, stopped] = await Promise.all([
+      rpcCall("getGlobalStat"),
+      rpcCall("tellActive"),
+      rpcCall("tellWaiting"),
+      rpcCall("tellStopped"),
+    ]);
+
+    globalStats = stats;
+    taskCache.clear();
+    for (const task of [...(active || []), ...(waiting || []), ...(stopped || [])]) {
+      taskCache.set(String(task.id), task);
+    }
+
+    broadcastState();
+  } catch {
+    // Server not available
+  }
+}
+
+function broadcastState() {
+  broadcastToPopups({
+    type: "state",
+    tasks: [...taskCache.values()],
+    stats: globalStats,
+    wsConnected,
+  });
+}
+
+// --- Popup Port Management ---
+
+function broadcastToPopups(msg) {
+  for (const port of popupPorts) {
+    try {
+      port.postMessage(msg);
+    } catch {
+      popupPorts.delete(port);
+    }
+  }
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "popup") return;
+
+  popupPorts.add(port);
+  port.onDisconnect.addListener(() => popupPorts.delete(port));
+
+  port.onMessage.addListener(async (msg) => {
+    if (msg.type === "getState") {
+      if (taskCache.size === 0) {
+        await refreshFullState();
+      }
+      port.postMessage({
+        type: "state",
+        tasks: [...taskCache.values()],
+        stats: globalStats,
+        wsConnected,
+      });
+    } else if (msg.type === "rpc") {
+      try {
+        const result = await rpcCall(msg.method, msg.params || []);
+
+        // Optimistic cache update for mutations
+        const targetId = msg.params?.[0] != null ? String(msg.params[0]) : null;
+        if (msg.method === "remove" && targetId) {
+          taskCache.delete(targetId);
+          recomputeGlobalStats();
+          broadcastState();
+        } else if (msg.method === "unpause" && targetId) {
+          const task = taskCache.get(targetId);
+          if (task) task.status = "Downloading";
+          recomputeGlobalStats();
+          broadcastState();
+        } else if (msg.method === "pause" && targetId) {
+          const task = taskCache.get(targetId);
+          if (task) task.status = "Paused";
+          recomputeGlobalStats();
+          broadcastState();
+        }
+
+        port.postMessage({ type: "rpcResponse", id: msg.id, success: true, result });
+      } catch (e) {
+        port.postMessage({ type: "rpcResponse", id: msg.id, success: false, error: e.message });
+      }
+    }
+  });
+});
+
+// --- RPC Communication ---
+
+function wsRpcSend(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = String(++wsRpcIdCounter);
+    const timeout = setTimeout(() => {
+      pendingWsRpc.delete(id);
+      reject(new Error("WS RPC timeout"));
+    }, 10000);
+
+    pendingWsRpc.set(id, {
+      resolve: (result) => { clearTimeout(timeout); resolve(result); },
+      reject: (err) => { clearTimeout(timeout); reject(err); },
+    });
+
+    ws.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+  });
+}
+
+async function httpRpcSend(rpcUrl, method, params) {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now().toString(),
+      method,
+      params,
+    }),
+  });
+  const data = await response.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.result;
 }
 
 async function rpcCall(method, params = []) {
@@ -22,22 +327,15 @@ async function rpcCall(method, params = []) {
     ? [`token:${settings.rpcSecret}`, ...params]
     : params;
 
-  const response = await fetch(settings.rpcUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now().toString(),
-      method,
-      params: rpcParams,
-    }),
-  });
-
-  const data = await response.json();
-  if (data.error) {
-    throw new Error(data.error.message);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      return await wsRpcSend(method, rpcParams);
+    } catch {
+      // Fall through to HTTP
+    }
   }
-  return data.result;
+
+  return httpRpcSend(settings.rpcUrl, method, rpcParams);
 }
 
 // --- Helpers ---
@@ -78,7 +376,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const referrer = tab?.url || info.pageUrl;
       const opts = buildOptions(cookie, referrer);
       const params = opts ? [info.linkUrl, opts] : [info.linkUrl];
-      const taskId = await rpcCall("addUri", params);
+      await rpcCall("addUri", params);
       chrome.notifications.create({
         type: "basic",
         iconUrl: "icons/icon128.png",
@@ -112,14 +410,9 @@ function getFileExtension(url) {
 
 function shouldIntercept(url, fileSize, settings) {
   if (!settings.autoIntercept) return false;
-
-  // Skip blob/data URLs
   if (url.startsWith("blob:") || url.startsWith("data:")) return false;
-
-  // Check file size threshold (if known)
   if (fileSize > 0 && fileSize < settings.minFileSize) return false;
 
-  // Check file type
   const ext = getFileExtension(url);
   if (!ext) return fileSize > 0 && fileSize >= settings.minFileSize;
 
@@ -136,17 +429,14 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
 
   if (!shouldIntercept(url, fileSize, settings)) return;
 
-  // Cancel browser download
   chrome.downloads.cancel(downloadItem.id);
   chrome.downloads.erase({ id: downloadItem.id });
 
-  // Capture cookies and referrer for the download URL
   const cookie = await getCookiesForUrl(url);
   const referrer = downloadItem.referrer || undefined;
   const opts = buildOptions(cookie, referrer);
   const params = opts ? [url, opts] : [url];
 
-  // Send to edl
   try {
     await rpcCall("addUri", params);
     chrome.notifications.create({
@@ -162,18 +452,30 @@ chrome.downloads.onCreated.addListener(async (downloadItem) => {
       title: "edl - 连接失败，使用浏览器下载",
       message: "请确认 edl rpc 服务已启动",
     });
-    // Re-trigger browser download since edl is not available
     chrome.downloads.download({ url });
   }
 });
 
-// --- Message Handler (for popup/options) ---
+// --- Message Handler (backward compat for options page) ---
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "rpc") {
     rpcCall(message.method, message.params || [])
       .then((result) => sendResponse({ success: true, result }))
       .catch((e) => sendResponse({ success: false, error: e.message }));
-    return true; // async response
+    return true;
   }
 });
+
+// --- Settings Change Listener ---
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.rpcUrl || changes.rpcSecret) {
+    disconnectWs();
+    connectWs();
+  }
+});
+
+// --- Initialize ---
+
+connectWs();
