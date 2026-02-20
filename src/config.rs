@@ -184,7 +184,9 @@ where
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
         None => Ok(None),
-        Some(s) => parse_speed_limit(&s).map(Some).map_err(serde::de::Error::custom),
+        Some(s) => parse_speed_limit(&s)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
     }
 }
 
